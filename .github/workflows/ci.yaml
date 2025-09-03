@@ -1,0 +1,143 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+jobs:
+  build-and-test:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Show Xcode version
+        run: xcodebuild -version
+      - name: Show available destinations
+        run: xcodebuild -project mplayer.xcodeproj -scheme mplayer -showdestinations
+      - name: Clean build directory
+        run: |
+          xcodebuild clean \
+            -project mplayer.xcodeproj \
+            -scheme mplayer
+      - name: Build project for macOS
+        run: |
+          xcodebuild build \
+            -project mplayer.xcodeproj \
+            -scheme mplayer \
+            -destination 'platform=macOS' \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            ONLY_ACTIVE_ARCH=YES
+      - name: Run unit tests
+        run: |
+          xcodebuild test \
+            -project mplayer.xcodeproj \
+            -scheme mplayer \
+            -destination 'platform=macOS' \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            ONLY_ACTIVE_ARCH=YES
+      - name: Build for Release configuration
+        run: |
+          xcodebuild build \
+            -project mplayer.xcodeproj \
+            -scheme mplayer \
+            -destination 'platform=macOS' \
+            -configuration Release \
+            CODE_SIGNING_ALLOWED=NO \
+            ONLY_ACTIVE_ARCH=YES
+  code-quality-check:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Check for basic code issues
+        run: |
+          # 检查基本代码问题
+          echo "🔍 Checking for common code issues..."
+
+          # 检查是否有 TODO/FIXME 注释
+          if grep -r "TODO\|FIXME\|XXX" mplayer/ --include="*.swift" || true; then
+            echo "📝 Found TODO/FIXME comments (review needed)"
+          fi
+
+          # 检查是否有强制解包
+          if grep -r "!" mplayer/ --include="*.swift" | grep -v "//\|print" || true; then
+            echo "⚠️ Found potential force unwrapping (review for safety)"
+          fi
+
+          # 检查是否有 print 语句
+          if grep -r "print(" mplayer/ --include="*.swift" || true; then
+            echo "🐛 Found print statements (consider using proper logging)"
+          fi
+
+          echo "✅ Code quality check completed"
+  security-check:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Check for sensitive information
+        run: |
+          echo "🔒 Checking for sensitive information..."
+
+          # 检查是否有敏感信息泄露
+          sensitive_found=false
+
+          if grep -ri "password\|secret\|api_key\|apikey\|token\|credential" mplayer/ --include="*.swift" --include="*.plist" || true; then
+            echo "⚠️ Found potential sensitive information in code"
+            sensitive_found=true
+          fi
+
+          if grep -ri "AKIAI\|AKIA[0-9A-Z]\{16\}" mplayer/ --include="*.swift" --include="*.plist" || true; then
+            echo "⚠️ Found potential AWS access key"
+            sensitive_found=true
+          fi
+
+          if [ "$sensitive_found" = false ]; then
+            echo "✅ No obvious sensitive information found"
+          else
+            echo "Please review the above matches to ensure no secrets are exposed"
+          fi
+      - name: Check project configuration
+        run: |
+          echo "📋 Checking project configuration..."
+
+          # 检查 bundle identifier 和 team ID
+          if grep -i "PRODUCT_BUNDLE_IDENTIFIER\|DEVELOPMENT_TEAM" mplayer.xcodeproj/project.pbxproj | head -10; then
+            echo "Project bundle identifier and team settings found"
+          fi
+
+          # 检查是否有硬编码的证书信息
+          if grep -i "CODE_SIGN_IDENTITY\|PROVISIONING_PROFILE" mplayer.xcodeproj/project.pbxproj | head -5; then
+            echo "Code signing configuration found"
+          fi
+
+          echo "✅ Project configuration check completed"
+  archive-check:
+    runs-on: macos-latest
+    needs: build-and-test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Test archive creation
+        run: |
+          echo "📦 Testing archive creation..."
+          xcodebuild archive \
+            -project mplayer.xcodeproj \
+            -scheme mplayer \
+            -destination 'platform=macOS' \
+            -archivePath ./build/mplayer.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            SKIP_INSTALL=NO
+
+          echo "✅ Archive creation successful"
+      - name: Check archive contents
+        run: |-
+          if [ -d "./build/mplayer.xcarchive" ]; then
+            echo "Archive created successfully"
+            ls -la ./build/mplayer.xcarchive/
+          else
+            echo "Archive not found"
+            exit 1
+          fi
