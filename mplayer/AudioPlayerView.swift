@@ -9,6 +9,7 @@ import SwiftUI
 import AVFoundation
 import UniformTypeIdentifiers
 import os.log
+import AVKit
 
 // Logger instance
 private let logger = Logger(subsystem: "com.mplayer.audioPlayer", category: "AudioPlayerView")
@@ -20,6 +21,7 @@ struct AudioFile: Identifiable, Equatable {
     let name: String
     var duration: Double = 0
     var durationString: String = "00:00"
+    var coverImage: NSImage? = nil
 }
 
 struct AudioPlayerView: View {
@@ -30,19 +32,48 @@ struct AudioPlayerView: View {
         VStack(spacing: 15) {
             // Top playback control area
             VStack(spacing: 15) {
-                // Current audio info and title
+                // Current audio info and title with cover image
                 HStack {
-                    Text("Audio Player")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(.secondary)
+                    // Album cover
+                    Group {
+                        if let currentIndex = playerViewModel.currentIndex,
+                           currentIndex < playerViewModel.audioFiles.count,
+                           let coverImage = playerViewModel.audioFiles[currentIndex].coverImage {
+                            Image(nsImage: coverImage)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: 60, height: 60)
+                                .clipped()
+                                .cornerRadius(8)
+                                .shadow(radius: 4)
+                        } else {
+                            // Default cover placeholder
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Color.secondary.opacity(0.3))
+                                .frame(width: 60, height: 60)
+                                .overlay(
+                                    Image(systemName: "music.note")
+                                        .font(.title2)
+                                        .foregroundColor(.secondary)
+                                )
+                                .shadow(radius: 4)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Audio Player")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.secondary)
+
+                        Text(playerViewModel.currentAudioName)
+                            .font(.headline)
+                            .foregroundColor(.primary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                    }
 
                     Spacer()
-
-                    Text(playerViewModel.currentAudioName)
-                        .font(.headline)
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
                 }
                 .padding(.horizontal)
 
@@ -349,7 +380,7 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     func selectAudioFiles() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [UTType.mp3, UTType.wav]
+        panel.allowedContentTypes = [UTType.mp3, UTType.wav, UTType.mpeg4Audio, UTType.aiff]
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
 
@@ -363,6 +394,8 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
                         newAudio.duration = player.duration
                         newAudio.durationString = formatTime(player.duration)
                     }
+                    // Extract cover image
+                    newAudio.coverImage = extractCoverImage(from: url)
                     audioFiles.append(newAudio)
                     logger.debug("➕ Added audio file: \(newAudio.name)")
                 } else {
@@ -616,6 +649,23 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
         if flag {
             playNext()
         }
+    }
+
+    // Extract cover image from audio file
+    private func extractCoverImage(from url: URL) -> NSImage? {
+        let asset = AVURLAsset(url: url)
+
+        // Try to get artwork from metadata
+        let metadataItems = asset.commonMetadata
+        for metadataItem in metadataItems {
+            if metadataItem.commonKey == .commonKeyArtwork,
+               let data = metadataItem.value as? Data {
+                return NSImage(data: data)
+            }
+        }
+
+        logger.debug("🖼️ No cover image found for: \(url.lastPathComponent)")
+        return nil
     }
 }
 
