@@ -206,7 +206,7 @@ struct AudioPlayerView: View {
                             RoundedRectangle(cornerRadius: 6)
                                 .fill(isEditMode ? Color.accentColor.opacity(0.1) : Color.clear)
                         )
-                        .onTapGesture {
+                        .onTapGesture(count: 2) {
                             if !isEditMode {
                                 if let actualIndex = playerViewModel.audioFiles.firstIndex(where: { $0.id == audio.id }) {
                                     playerViewModel.playAtIndex(actualIndex)
