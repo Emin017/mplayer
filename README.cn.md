@@ -9,7 +9,7 @@
 
 ![GitHub](https://img.shields.io/github/license/Emin017/mplayer)
 ![GitHub workflows](https://img.shields.io/github/actions/workflow/status/Emin017/mplayer/ci.yml)
-![GitHub issues](https://img.shields.io/github/issues/Emin017/git-commit-generator)
+![GitHub issues](https://img.shields.io/github/issues/Emin017/mplayer)
 ![GitHub pull requests](https://img.shields.io/github/issues-pr/Emin017/mplayer)
 ![GitHub release (latest by date)](https://img.shields.io/github/v/release/Emin017/mplayer)
 
