@@ -8,6 +8,10 @@
 import SwiftUI
 import AVFoundation
 import UniformTypeIdentifiers
+import os.log
+
+// Logger instance
+private let logger = Logger(subsystem: "com.mplayer.audioPlayer", category: "AudioPlayerView")
 
 // Audio file data structure
 struct AudioFile: Identifiable, Equatable {
@@ -20,6 +24,7 @@ struct AudioFile: Identifiable, Equatable {
 
 struct AudioPlayerView: View {
     @StateObject private var playerViewModel = AudioPlayerViewModel()
+    @State private var isEditMode: Bool = false
 
     var body: some View {
         VStack(spacing: 15) {
@@ -62,7 +67,7 @@ struct AudioPlayerView: View {
                 // Playback control buttons
                 HStack(spacing: 25) {
                     // Add audio button
-                    Button("添加音频") {
+                    Button("Add Audio") {
                         playerViewModel.selectAudioFiles()
                     }
                     .buttonStyle(.bordered)
@@ -125,14 +130,25 @@ struct AudioPlayerView: View {
             VStack(alignment: .leading, spacing: 10) {
                 // Playlist title
                 HStack {
-                    Text("播放列表")
+                    Text("Playlist")
                         .font(.title3)
                         .fontWeight(.semibold)
                         .foregroundColor(.primary)
                     Spacer()
-                    Text("\(playerViewModel.audioFiles.count) 首歌曲")
+
+                    // Edit mode toggle button
+                    Button(isEditMode ? "Done" : "Edit") {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            isEditMode.toggle()
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .font(.caption)
+
+                    Text("\(playerViewModel.audioFiles.count) songs")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                        .padding(.leading, 8)
                 }
                 .padding(.horizontal)
                 .padding(.top, 10)
@@ -141,6 +157,15 @@ struct AudioPlayerView: View {
                 List {
                     ForEach(Array(playerViewModel.audioFiles.enumerated()), id: \.element.id) { index, audio in
                         HStack {
+                            // Drag indicator (only shown in edit mode)
+                            if isEditMode {
+                                Image(systemName: "line.3.horizontal")
+                                    .foregroundColor(.accentColor)
+                                    .font(.system(size: 14, weight: .medium))
+                                    .frame(width: 20)
+                                    .help("Drag to reorder") // macOS tooltip text
+                            }
+
                             // Play index number
                             Text("\(index + 1)")
                                 .font(.system(size: 12))
@@ -177,14 +202,105 @@ struct AudioPlayerView: View {
                         }
                         .padding(.vertical, 4)
                         .contentShape(Rectangle())
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(isEditMode ? Color.accentColor.opacity(0.1) : Color.clear)
+                        )
                         .onTapGesture {
-                            if let actualIndex = playerViewModel.audioFiles.firstIndex(where: { $0.id == audio.id }) {
-                                playerViewModel.playAtIndex(actualIndex)
+                            if !isEditMode {
+                                if let actualIndex = playerViewModel.audioFiles.firstIndex(where: { $0.id == audio.id }) {
+                                    playerViewModel.playAtIndex(actualIndex)
+                                }
+                            }
+                        }
+                        .contextMenu {
+                            Button("Move Up") {
+                                if let actualIndex = playerViewModel.audioFiles.firstIndex(where: { $0.id == audio.id }) {
+                                    playerViewModel.moveAudioUp(from: actualIndex)
+                                }
+                            }
+                            .disabled(index == 0)
+
+                            Button("Move Down") {
+                                if let actualIndex = playerViewModel.audioFiles.firstIndex(where: { $0.id == audio.id }) {
+                                    playerViewModel.moveAudioDown(from: actualIndex)
+                                }
+                            }
+                            .disabled(index == playerViewModel.audioFiles.count - 1)
+
+                            Divider()
+
+                            Button("Move to Top") {
+                                if let actualIndex = playerViewModel.audioFiles.firstIndex(where: { $0.id == audio.id }) {
+                                    playerViewModel.moveAudioToTop(from: actualIndex)
+                                }
+                            }
+                            .disabled(index == 0)
+
+                            Button("Move to Bottom") {
+                                if let actualIndex = playerViewModel.audioFiles.firstIndex(where: { $0.id == audio.id }) {
+                                    playerViewModel.moveAudioToBottom(from: actualIndex)
+                                }
+                            }
+                            .disabled(index == playerViewModel.audioFiles.count - 1)
+
+                            Divider()
+
+                            Button("Remove from List", role: .destructive) {
+                                if let actualIndex = playerViewModel.audioFiles.firstIndex(where: { $0.id == audio.id }) {
+                                    playerViewModel.removeAudio(at: IndexSet([actualIndex]))
+                                }
+                            }
+                        }
+                        .if(isEditMode) { view in
+                            view.draggable(audio.id.uuidString) {
+                                // Drag preview
+                                HStack {
+                                    Image(systemName: "music.note")
+                                    Text(audio.name)
+                                        .lineLimit(1)
+                                }
+                                .padding(8)
+                                .background(Color.accentColor.opacity(0.2))
+                                .cornerRadius(8)
+                            }
+                            .dropDestination(for: String.self) { items, location in
+                                logger.debug("🎯 Drop triggered: item count \(items.count)")
+
+                                // Only handle drag and drop in edit mode
+                                guard isEditMode,
+                                        let draggedIdString = items.first,
+                                        let draggedId = UUID(uuidString: draggedIdString),
+                                        draggedId != audio.id else {
+                                    logger.info("❌ Drop rejected: edit mode=\(isEditMode), valid ID=\(items.first != nil)")
+                                    return false
+                                }
+
+                                logger.debug("🔍 Drag ID: \(draggedIdString), target audio: \(audio.name)")
+
+                                // Find source and target indices
+                                guard let sourceIndex = playerViewModel.audioFiles.firstIndex(where: { $0.id == draggedId }),
+                                      let targetIndex = playerViewModel.audioFiles.firstIndex(where: { $0.id == audio.id }) else {
+                                    logger.error("❌ Indices not found")
+                                    return false
+                                }
+
+                                logger.info("📍 Source index: \(sourceIndex), target index: \(targetIndex)")
+
+                                // Call simple move method directly
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    playerViewModel.moveAudioFromTo(from: sourceIndex, to: targetIndex)
+                                }
+
+                                return true
+                            } isTargeted: { isTargeted in
+                                if isTargeted {
+                                    logger.debug("🎯 Drag hovering over: \(audio.name)")
+                                }
                             }
                         }
                     }
                     .onDelete(perform: playerViewModel.removeAudio)
-                    .onMove(perform: playerViewModel.moveAudio)
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
@@ -205,7 +321,7 @@ struct AudioPlayerView: View {
 class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published var audioFiles: [AudioFile] = []
     @Published var currentIndex: Int? = nil
-    @Published var currentAudioName: String = "未选择音频"
+    @Published var currentAudioName: String = "No audio selected"
     @Published var isPlaying: Bool = false
     @Published var currentTime: Double = 0
     @Published var duration: Double = 0
@@ -214,6 +330,9 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     private var audioPlayer: AVAudioPlayer?
     private var timer: Timer?
+
+    // Logger instance
+    private let logger = Logger(subsystem: "com.mplayer.audioPlayer", category: "AudioPlayerViewModel")
 
     override init() {
         super.init()
@@ -236,6 +355,7 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
         if panel.runModal() == .OK {
             let urls = panel.urls
+            logger.info("📁 Selected \(urls.count) audio files")
             for url in urls {
                 if !audioFiles.contains(where: { $0.url == url }) {
                     var newAudio = AudioFile(url: url, name: url.lastPathComponent)
@@ -244,11 +364,16 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
                         newAudio.durationString = formatTime(player.duration)
                     }
                     audioFiles.append(newAudio)
+                    logger.debug("➕ Added audio file: \(newAudio.name)")
+                } else {
+                    logger.debug("⚠️ Skipped duplicate file: \(url.lastPathComponent)")
                 }
             }
             if currentIndex == nil && !audioFiles.isEmpty {
                 playAtIndex(0)
             }
+        } else {
+            logger.debug("❌ Audio file selection cancelled")
         }
         objectWillChange.send()
     }
@@ -257,6 +382,7 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
         stop()
         currentIndex = index
         let audio = audioFiles[index]
+        logger.info("🎵 Playing audio at index \(index): \(audio.name)")
         setupAudioPlayer(with: audio.url)
     }
 
@@ -269,8 +395,9 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
             duration = audioPlayer?.duration ?? 0
             durationString = formatTime(duration)
             startTimer()
+            logger.info("✅ Audio loaded successfully: \(url.lastPathComponent)")
         } catch {
-            print("Audio loading failed: \(error)")
+            logger.error("❌ Audio loading failed: \(error.localizedDescription)")
             currentAudioName = "Audio loading failed"
         }
         objectWillChange.send()
@@ -281,9 +408,11 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
         if isPlaying {
             player.pause()
             stopTimer()
+            logger.info("⏸️ Audio paused")
         } else {
             player.play()
             startTimer()
+            logger.info("▶️ Audio resumed")
         }
         isPlaying.toggle()
         objectWillChange.send()
@@ -296,6 +425,7 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
         currentTimeString = "00:00"
         stopTimer()
         isPlaying = false
+        logger.info("⏹️ Audio stopped")
         objectWillChange.send()
     }
 
@@ -336,7 +466,7 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
         if let current = currentIndex, removedIndices.contains(current) {
             stop()
             currentIndex = nil
-            currentAudioName = "未选择音频"
+            currentAudioName = "No audio selected"
         } else if let current = currentIndex, current >= audioFiles.count {
             currentIndex = audioFiles.count - 1
         }
@@ -344,11 +474,127 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     func moveAudio(from source: IndexSet, to destination: Int) {
-        audioFiles.move(fromOffsets: source, toOffset: destination)
+        // Save the currently playing audio ID for relocation after moving
+        var currentlyPlayingAudioId: UUID? = nil
         if let current = currentIndex {
-            currentIndex = audioFiles.firstIndex(where: { $0.id == audioFiles[current].id })
+            currentlyPlayingAudioId = audioFiles[current].id
         }
+
+        // Execute move operation
+        audioFiles.move(fromOffsets: source, toOffset: destination)
+
+        // Re-find the new index of currently playing audio
+        if let playingId = currentlyPlayingAudioId {
+            currentIndex = audioFiles.firstIndex(where: { $0.id == playingId })
+        }
+
         objectWillChange.send()
+    }
+
+    // Simplified drag move method
+    func moveAudioFromTo(from sourceIndex: Int, to targetIndex: Int) {
+        logger.debug("🔄 Attempting move: from index \(sourceIndex) to index \(targetIndex)")
+
+        guard sourceIndex != targetIndex,
+                sourceIndex >= 0, sourceIndex < audioFiles.count,
+                targetIndex >= 0, targetIndex < audioFiles.count else {
+            logger.info("❌ Move blocked: invalid or same indices")
+            return
+        }
+
+        // Save currently playing audio ID
+        var currentlyPlayingAudioId: UUID? = nil
+        if let current = currentIndex {
+            currentlyPlayingAudioId = audioFiles[current].id
+        }
+
+        // Move element
+        let movingAudio = audioFiles[sourceIndex]
+        logger.info("📦 Moving audio: \(movingAudio.name)")
+
+        audioFiles.remove(at: sourceIndex)
+
+        // Adjust target index (if source index is before target index, target index needs to be reduced by 1)
+        let adjustedTargetIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex
+        audioFiles.insert(movingAudio, at: adjustedTargetIndex)
+
+        logger.info("✅ Move completed: \(movingAudio.name) is now at index \(adjustedTargetIndex)")
+
+        // Re-find the new index of currently playing audio
+        if let playingId = currentlyPlayingAudioId {
+            currentIndex = audioFiles.firstIndex(where: { $0.id == playingId })
+        }
+
+        objectWillChange.send()
+    }
+
+    // Move up one position
+    func moveAudioUp(from index: Int) {
+        guard index > 0 && index < audioFiles.count else { return }
+
+        let movingAudio = audioFiles[index]
+        audioFiles.remove(at: index)
+        audioFiles.insert(movingAudio, at: index - 1)
+
+        // Update current playing index
+        updateCurrentIndexAfterMove(originalIndex: index, newIndex: index - 1)
+        objectWillChange.send()
+    }
+
+    // Move down one position
+    func moveAudioDown(from index: Int) {
+        guard index >= 0 && index < audioFiles.count - 1 else { return }
+
+        let movingAudio = audioFiles[index]
+        audioFiles.remove(at: index)
+        audioFiles.insert(movingAudio, at: index + 1)
+
+        // Update current playing index
+        updateCurrentIndexAfterMove(originalIndex: index, newIndex: index + 1)
+        objectWillChange.send()
+    }
+
+    // Move to top
+    func moveAudioToTop(from index: Int) {
+        guard index > 0 && index < audioFiles.count else { return }
+
+        let movingAudio = audioFiles[index]
+        audioFiles.remove(at: index)
+        audioFiles.insert(movingAudio, at: 0)
+
+        // Update current playing index
+        updateCurrentIndexAfterMove(originalIndex: index, newIndex: 0)
+        objectWillChange.send()
+    }
+
+    // Move to bottom
+    func moveAudioToBottom(from index: Int) {
+        guard index >= 0 && index < audioFiles.count - 1 else { return }
+
+        let movingAudio = audioFiles[index]
+        audioFiles.remove(at: index)
+        audioFiles.append(movingAudio)
+
+        // Update current playing index
+        updateCurrentIndexAfterMove(originalIndex: index, newIndex: audioFiles.count - 1)
+        objectWillChange.send()
+    }
+
+    // Helper method: update current playing index
+    private func updateCurrentIndexAfterMove(originalIndex: Int, newIndex: Int) {
+        guard let current = currentIndex else { return }
+
+        if current == originalIndex {
+            // The moved song is currently playing
+            currentIndex = newIndex
+        } else if originalIndex < current && newIndex >= current {
+            // Song moved from front to current or back, current index needs to decrease by 1
+            currentIndex = current - 1
+        } else if originalIndex > current && newIndex <= current {
+            // Song moved from back to current or front, current index needs to increase by 1
+            currentIndex = current + 1
+        }
+        // Other cases: current index remains unchanged
     }
 
     private func startTimer() {
@@ -374,6 +620,17 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         if flag {
             playNext()
+        }
+    }
+}
+
+// View extension for conditional modifiers
+extension View {
+    @ViewBuilder func `if`<Content: View>(_ condition: Bool, transform: (Self) -> Content) -> some View {
+        if condition {
+            transform(self)
+        } else {
+            self
         }
     }
 }
