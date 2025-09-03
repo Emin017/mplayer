@@ -384,6 +384,10 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
         let audio = audioFiles[index]
         logger.info("🎵 Playing audio at index \(index): \(audio.name)")
         setupAudioPlayer(with: audio.url)
+        // Auto play after loading
+        audioPlayer?.play()
+        isPlaying = true
+        startTimer()
     }
 
     private func setupAudioPlayer(with url: URL) {
@@ -394,7 +398,6 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
             currentAudioName = url.lastPathComponent
             duration = audioPlayer?.duration ?? 0
             durationString = formatTime(duration)
-            startTimer()
             logger.info("✅ Audio loaded successfully: \(url.lastPathComponent)")
         } catch {
             logger.error("❌ Audio loading failed: \(error.localizedDescription)")
@@ -439,10 +442,6 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
     func playPrevious() {
         if let index = currentIndex, index > 0 {
             playAtIndex(index - 1)
-            if isPlaying {
-                audioPlayer?.play()
-                startTimer()
-            }
         }
         objectWillChange.send()
     }
@@ -450,10 +449,6 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
     func playNext() {
         if let index = currentIndex, index < audioFiles.count - 1 {
             playAtIndex(index + 1)
-            if isPlaying {
-                audioPlayer?.play()
-                startTimer()
-            }
         } else {
             stop()
         }
