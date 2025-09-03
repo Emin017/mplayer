@@ -15,6 +15,35 @@ import MediaPlayer
 // Logger instance
 private let logger = Logger(subsystem: "com.mplayer.audioPlayer", category: "AudioPlayerView")
 
+// Repeat mode enumeration
+enum RepeatMode: String, CaseIterable {
+    case none = "none"
+    case single = "single"
+    case playlist = "playlist"
+
+    var iconName: String {
+        switch self {
+        case .none:
+            return "repeat"
+        case .single:
+            return "repeat.1"
+        case .playlist:
+            return "repeat"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .none:
+            return "No repeat"
+        case .single:
+            return "Repeat current song"
+        case .playlist:
+            return "Repeat playlist"
+        }
+    }
+}
+
 // Audio file data structure
 struct AudioFile: Identifiable, Equatable {
     let id = UUID()
@@ -134,7 +163,9 @@ struct AudioPlayerView: View {
                             .frame(width: 35, height: 35)
                     }
                     .buttonStyle(PlainButtonStyle())
-                    .disabled(playerViewModel.currentIndex == nil || playerViewModel.currentIndex == playerViewModel.audioFiles.count - 1)
+                    .disabled(playerViewModel.currentIndex == nil ||
+                             (playerViewModel.currentIndex == playerViewModel.audioFiles.count - 1 &&
+                              playerViewModel.repeatMode == .none))
 
                     // Stop button
                     Button(action: {
@@ -145,6 +176,43 @@ struct AudioPlayerView: View {
                             .frame(width: 35, height: 35)
                     }
                     .buttonStyle(PlainButtonStyle())
+                }
+
+                // Secondary control buttons
+                HStack(spacing: 20) {
+                    Spacer()
+
+                    // Repeat mode button
+                    Button(action: {
+                        playerViewModel.toggleRepeatMode()
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: playerViewModel.repeatMode.iconName)
+                                .foregroundColor(playerViewModel.repeatMode == .none ? .secondary : .primary)
+                                .font(.system(size: 16, weight: .medium))
+                            Text(playerViewModel.repeatMode.description)
+                                .font(.caption)
+                                .foregroundColor(playerViewModel.repeatMode == .none ? .secondary : .primary)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(playerViewModel.repeatMode == .none ?
+                                      Color.clear :
+                                      Color.accentColor.opacity(0.2))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .stroke(playerViewModel.repeatMode == .none ?
+                                               Color.secondary.opacity(0.3) :
+                                               Color.accentColor.opacity(0.5), lineWidth: 1)
+                                )
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .help(playerViewModel.repeatMode.description)
+
+                    Spacer()
                 }
             }
             .padding()
@@ -359,6 +427,7 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published var duration: Double = 0
     @Published var currentTimeString: String = "00:00"
     @Published var durationString: String = "00:00"
+    @Published var repeatMode: RepeatMode = .none
 
     private var audioPlayer: AVAudioPlayer?
     private var timer: Timer?
@@ -618,10 +687,29 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     func playNext() {
-        if let index = currentIndex, index < audioFiles.count - 1 {
-            playAtIndex(index + 1, autoPlay: true)  // Previous/Next: auto-play
-        } else {
-            stop()
+        guard let index = currentIndex else { return }
+
+        switch repeatMode {
+        case .single:
+            // Single repeat: replay current song
+            playAtIndex(index, autoPlay: true)
+            logger.info("🔂 Single repeat: replaying current song")
+        case .playlist:
+            // Playlist repeat: go to next song, or back to first song if at end
+            if index < audioFiles.count - 1 {
+                playAtIndex(index + 1, autoPlay: true)
+            } else {
+                playAtIndex(0, autoPlay: true)  // Back to first song
+                logger.info("🔁 Playlist repeat: back to first song")
+            }
+        case .none:
+            // No repeat: go to next song or stop if at end
+            if index < audioFiles.count - 1 {
+                playAtIndex(index + 1, autoPlay: true)
+            } else {
+                stop()
+                logger.info("⏹️ End of playlist: stopping")
+            }
         }
         objectWillChange.send()
     }
@@ -785,6 +873,20 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
         let minutes = Int(time) / 60
         let seconds = Int(time) % 60
         return String(format: "%02d:%02d", minutes, seconds)
+    }
+
+    // Toggle repeat mode
+    func toggleRepeatMode() {
+        switch repeatMode {
+        case .none:
+            repeatMode = .single
+        case .single:
+            repeatMode = .playlist
+        case .playlist:
+            repeatMode = .none
+        }
+        logger.info("🔄 Repeat mode changed to: \(self.repeatMode.description)")
+        objectWillChange.send()
     }
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
