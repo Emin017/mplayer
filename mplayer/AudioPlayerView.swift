@@ -11,6 +11,7 @@ import UniformTypeIdentifiers
 import os.log
 import AVKit
 import MediaPlayer
+import CoreMedia
 
 // Logger instance
 private let logger = Logger(subsystem: "com.mplayer.audioPlayer", category: "AudioPlayerView")
@@ -53,6 +54,14 @@ struct AudioFile: Identifiable, Equatable {
     var durationString: String = "00:00"
     var coverImage: NSImage? = nil
     var waveformData: [Float] = []
+
+    // Audio format information
+    var format: String = "Unknown"
+    var sampleRate: String = "Unknown"
+    var bitDepth: String = "Unknown"
+    var bitRate: String = "Unknown"
+    var channels: String = "Unknown"
+    var codec: String = "Unknown"
 }
 
 struct AudioPlayerView: View {
@@ -68,8 +77,8 @@ struct AudioPlayerView: View {
                     // Album cover
                     Group {
                         if let currentIndex = playerViewModel.currentIndex,
-                           currentIndex < playerViewModel.audioFiles.count,
-                           let coverImage = playerViewModel.audioFiles[currentIndex].coverImage {
+                            currentIndex < playerViewModel.audioFiles.count,
+                            let coverImage = playerViewModel.audioFiles[currentIndex].coverImage {
                             Image(nsImage: coverImage)
                                 .resizable()
                                 .aspectRatio(contentMode: .fill)
@@ -105,6 +114,37 @@ struct AudioPlayerView: View {
                     }
 
                     Spacer()
+
+                    // Audio information panel - simplified single line format
+                    if let currentIndex = playerViewModel.currentIndex,
+                        currentIndex < playerViewModel.audioFiles.count {
+                        let currentAudio = playerViewModel.audioFiles[currentIndex]
+                        VStack(alignment: .trailing, spacing: 4) {
+                            // Format info in one line: MP3/CBR 320kbps 44100Hz stereo
+                            Text("\(currentAudio.format) \(currentAudio.bitRate) \(currentAudio.sampleRate) \(currentAudio.channels)")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+
+                            // Codec info on second line if different from format
+                            if currentAudio.codec != currentAudio.format && currentAudio.codec != "Unknown" {
+                                Text("编码: \(currentAudio.codec)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary.opacity(0.8))
+                                    .lineLimit(1)
+                            }
+                        }
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color(NSColor.controlBackgroundColor).opacity(0.3))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
+                                )
+                        )
+                    }
                 }
                 .padding(.horizontal)
 
@@ -616,6 +656,8 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
                     newAudio.coverImage = extractCoverImage(from: url)
                     // Generate waveform data
                     newAudio.waveformData = generateWaveformData(from: url)
+                    // Extract audio format information
+                    newAudio = extractAudioFormatInfo(for: newAudio)
                     audioFiles.append(newAudio)
                     logger.debug("➕ Added audio file: \(newAudio.name)")
                 } else {
@@ -992,6 +1034,144 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
         logger.info("✅ Generated waveform data with \(waveformData.count) points for: \(url.lastPathComponent)")
         return waveformData
+    }
+
+    // Extract audio format information
+    private func extractAudioFormatInfo(for audioFile: AudioFile) -> AudioFile {
+        var updatedAudio = audioFile
+
+        do {
+            let asset = AVURLAsset(url: audioFile.url)
+
+            // Get audio tracks
+            let audioTracks = asset.tracks(withMediaType: .audio)
+            guard let audioTrack = audioTracks.first else {
+                logger.error("❌ No audio tracks found in: \(audioFile.name)")
+                return updatedAudio
+            }
+
+            // Get format descriptions
+            let formatDescriptions = audioTrack.formatDescriptions
+            guard let formatDescription = formatDescriptions.first else {
+                logger.error("❌ No format description found in: \(audioFile.name)")
+                return updatedAudio
+            }
+
+            // Extract basic format info from Core Media
+            let basicDescription = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription as! CMAudioFormatDescription)
+
+            if let basicDesc = basicDescription?.pointee {
+                // Sample rate
+                updatedAudio.sampleRate = String(format: "%.0f Hz", basicDesc.mSampleRate)
+
+                // Channels
+                let channelCount = basicDesc.mChannelsPerFrame
+                if channelCount == 1 {
+                    updatedAudio.channels = "mono"
+                } else if channelCount == 2 {
+                    updatedAudio.channels = "stereo"
+                } else {
+                    updatedAudio.channels = "\(channelCount)ch"
+                }
+
+                // Bit depth
+                let bitsPerChannel = basicDesc.mBitsPerChannel
+                if bitsPerChannel > 0 {
+                    updatedAudio.bitDepth = "\(bitsPerChannel) bit"
+                } else {
+                    updatedAudio.bitDepth = "压缩格式"
+                }
+
+                // Format ID to codec mapping
+                let formatID = basicDesc.mFormatID
+                switch formatID {
+                case kAudioFormatLinearPCM:
+                    updatedAudio.codec = "PCM"
+                case kAudioFormatMPEGLayer3:
+                    updatedAudio.codec = "MP3"
+                case kAudioFormatMPEG4AAC:
+                    updatedAudio.codec = "AAC"
+                case kAudioFormatAppleLossless:
+                    updatedAudio.codec = "ALAC"
+                case kAudioFormatFLAC:
+                    updatedAudio.codec = "FLAC"
+                default:
+                    // Convert FourCharCode to string
+                    let fourCC = String(format: "%c%c%c%c",
+                                      (formatID >> 24) & 255,
+                                      (formatID >> 16) & 255,
+                                      (formatID >> 8) & 255,
+                                      formatID & 255)
+                    updatedAudio.codec = fourCC
+                }
+            }
+
+            // File extension to format
+            let fileExtension = audioFile.url.pathExtension.lowercased()
+            switch fileExtension {
+            case "mp3":
+                updatedAudio.format = "MP3"
+            case "wav":
+                updatedAudio.format = "WAV"
+            case "aac", "m4a":
+                updatedAudio.format = "AAC/M4A"
+            case "flac":
+                updatedAudio.format = "FLAC"
+            case "aiff", "aif":
+                updatedAudio.format = "AIFF"
+            case "ogg":
+                updatedAudio.format = "OGG"
+            case "wma":
+                updatedAudio.format = "WMA"
+            default:
+                updatedAudio.format = fileExtension.uppercased()
+            }
+
+            // Estimate bit rate for compressed formats
+            if let basicDesc = basicDescription?.pointee {
+                let duration = updatedAudio.duration
+                if duration > 0 {
+                    // Get file size
+                    if let fileSize = try? audioFile.url.resourceValues(forKeys: [.fileSizeKey]).fileSize {
+                        let fileSizeInBits = Double(fileSize) * 8
+                        let estimatedBitRate = fileSizeInBits / duration / 1000 // kbps
+
+                        // For compressed formats, assume CBR for common bitrates, otherwise VBR
+                        if basicDesc.mFormatID == kAudioFormatLinearPCM {
+                            let theoreticalBitRate = basicDesc.mSampleRate * Double(basicDesc.mChannelsPerFrame) * Double(basicDesc.mBitsPerChannel) / 1000
+                            updatedAudio.bitRate = String(format: "%.0fkbps", theoreticalBitRate)
+                        } else {
+                            let roundedBitRate = round(estimatedBitRate)
+                            // Check if it's a common CBR bitrate
+                            let commonCBRRates: [Double] = [64, 96, 128, 160, 192, 224, 256, 320]
+                            if commonCBRRates.contains(roundedBitRate) {
+                                updatedAudio.bitRate = "CBR \(Int(roundedBitRate))kbps"
+                            } else {
+                                updatedAudio.bitRate = "VBR ~\(Int(roundedBitRate))kbps"
+                            }
+                        }
+                    } else {
+                        // Calculate theoretical bitrate for uncompressed formats
+                        if basicDesc.mFormatID == kAudioFormatLinearPCM {
+                            let theoreticalBitRate = basicDesc.mSampleRate * Double(basicDesc.mChannelsPerFrame) * Double(basicDesc.mBitsPerChannel) / 1000
+                            updatedAudio.bitRate = String(format: "%.0fkbps", theoreticalBitRate)
+                        } else {
+                            updatedAudio.bitRate = "VBR"
+                        }
+                    }
+                }
+            }
+
+            logger.info("📊 Audio format info extracted for: \(audioFile.name)")
+            logger.debug("   Format: \(updatedAudio.format), Codec: \(updatedAudio.codec)")
+            logger.debug("   Sample Rate: \(updatedAudio.sampleRate), Channels: \(updatedAudio.channels)")
+            logger.debug("   Bit Depth: \(updatedAudio.bitDepth), Bit Rate: \(updatedAudio.bitRate)")
+
+        } catch {
+            logger.error("❌ Failed to extract audio format info: \(error.localizedDescription)")
+        }
+
+        return updatedAudio
     }
 }
 
