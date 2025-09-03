@@ -19,7 +19,8 @@ An audio player app built with SwiftUI.
 [![English](https://img.shields.io/badge/English-README-2ea44f?style=for-the-badge)](README.md)
 [![中文](https://img.shields.io/badge/中文-介绍-FF6F61?style=for-the-badge)](README.cn.md)
 
-  <img style="center" width="441" height="417" alt="example" src="https://github.com/user-attachments/assets/b66211f3-f677-476d-b4f6-a869048e973e" />
+  <img width="441" height="441" alt="example" src="https://github.com/user-attachments/assets/1a1d80d4-b79f-4b16-bca9-19743a3500c7" />
+
 </div>
 
 > [!NOTE]
