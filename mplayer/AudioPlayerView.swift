@@ -240,7 +240,7 @@ struct AudioPlayerView: View {
                         .onTapGesture(count: 2) {
                             if !isEditMode {
                                 if let actualIndex = playerViewModel.audioFiles.firstIndex(where: { $0.id == audio.id }) {
-                                    playerViewModel.playAtIndex(actualIndex)
+                                    playerViewModel.playAtIndex(actualIndex, autoPlay: true)  // User click: auto-play
                                 }
                             }
                         }
@@ -403,7 +403,7 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
                 }
             }
             if currentIndex == nil && !audioFiles.isEmpty {
-                playAtIndex(0)
+                playAtIndex(0, autoPlay: false)  // First load: don't auto-play
             }
         } else {
             logger.debug("❌ Audio file selection cancelled")
@@ -411,16 +411,22 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
         objectWillChange.send()
     }
 
-    func playAtIndex(_ index: Int) {
+    func playAtIndex(_ index: Int, autoPlay: Bool = true) {
         stop()
         currentIndex = index
         let audio = audioFiles[index]
-        logger.info("🎵 Playing audio at index \(index): \(audio.name)")
+        logger.info("🎵 Loading audio at index \(index): \(audio.name)")
         setupAudioPlayer(with: audio.url)
-        // Auto play after loading
-        audioPlayer?.play()
-        isPlaying = true
-        startTimer()
+
+        if autoPlay {
+            // Auto play after loading
+            audioPlayer?.play()
+            isPlaying = true
+            startTimer()
+            logger.info("▶️ Auto-playing: \(audio.name)")
+        } else {
+            logger.info("⏸️ Loaded but not playing: \(audio.name)")
+        }
     }
 
     private func setupAudioPlayer(with url: URL) {
@@ -474,14 +480,14 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     func playPrevious() {
         if let index = currentIndex, index > 0 {
-            playAtIndex(index - 1)
+            playAtIndex(index - 1, autoPlay: true)  // Previous/Next: auto-play
         }
         objectWillChange.send()
     }
 
     func playNext() {
         if let index = currentIndex, index < audioFiles.count - 1 {
-            playAtIndex(index + 1)
+            playAtIndex(index + 1, autoPlay: true)  // Previous/Next: auto-play
         } else {
             stop()
         }
