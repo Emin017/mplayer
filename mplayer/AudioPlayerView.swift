@@ -10,6 +10,7 @@ import AVFoundation
 import UniformTypeIdentifiers
 import os.log
 import AVKit
+import MediaPlayer
 
 // Logger instance
 private let logger = Logger(subsystem: "com.mplayer.audioPlayer", category: "AudioPlayerView")
@@ -368,6 +369,7 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
     override init() {
         super.init()
         NotificationCenter.default.addObserver(self, selector: #selector(handleAudioDidFinishPlaying), name: .AVPlayerItemDidPlayToEndTime, object: nil)
+        setupRemoteTransportControls()
     }
 
     deinit {
@@ -376,6 +378,131 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
     
     @objc private func handleAudioDidFinishPlaying() {
         playNext()
+    }
+
+    // MARK: - Remote Transport Controls Setup
+    private func setupRemoteTransportControls() {
+        let commandCenter = MPRemoteCommandCenter.shared()
+
+        // Play command
+        commandCenter.playCommand.addTarget { [weak self] event in
+            if let self = self, let player = self.audioPlayer {
+                if !self.isPlaying {
+                    player.play()
+                    self.isPlaying = true
+                    self.startTimer()
+                    self.updateNowPlayingInfo()
+                    self.logger.info("▶️ Remote play command executed")
+                }
+                return .success
+            }
+            return .commandFailed
+        }
+
+        // Pause command
+        commandCenter.pauseCommand.addTarget { [weak self] event in
+            if let self = self, let player = self.audioPlayer {
+                if self.isPlaying {
+                    player.pause()
+                    self.isPlaying = false
+                    self.stopTimer()
+                    self.updateNowPlayingInfo()
+                    self.logger.info("⏸️ Remote pause command executed")
+                }
+                return .success
+            }
+            return .commandFailed
+        }
+
+        // Previous track command
+        commandCenter.previousTrackCommand.addTarget { [weak self] event in
+            if let self = self {
+                self.playPrevious()
+                self.logger.info("⏮️ Remote previous command executed")
+                return .success
+            }
+            return .commandFailed
+        }
+
+        // Next track command
+        commandCenter.nextTrackCommand.addTarget { [weak self] event in
+            if let self = self {
+                self.playNext()
+                self.logger.info("⏭️ Remote next command executed")
+                return .success
+            }
+            return .commandFailed
+        }
+
+        // Stop command
+        commandCenter.stopCommand.addTarget { [weak self] event in
+            if let self = self {
+                self.stop()
+                self.logger.info("⏹️ Remote stop command executed")
+                return .success
+            }
+            return .commandFailed
+        }
+
+        // Toggle play/pause command
+        commandCenter.togglePlayPauseCommand.addTarget { [weak self] event in
+            if let self = self {
+                self.playPause()
+                self.logger.info("⏯️ Remote toggle play/pause command executed")
+                return .success
+            }
+            return .commandFailed
+        }
+
+        // Position change command (seeking)
+        commandCenter.changePlaybackPositionCommand.addTarget { [weak self] event in
+            if let self = self,
+            let positionEvent = event as? MPChangePlaybackPositionCommandEvent {
+                self.seek(to: positionEvent.positionTime)
+                self.logger.info("🎯 Remote seek command executed to \(positionEvent.positionTime)")
+                return .success
+            }
+            return .commandFailed
+        }
+
+        logger.info("🎛️ Remote transport controls configured")
+    }
+
+    // MARK: - Now Playing Info
+    private func updateNowPlayingInfo() {
+        guard let currentIndex = currentIndex,
+              currentIndex < audioFiles.count else {
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            return
+        }
+
+        let currentAudio = audioFiles[currentIndex]
+        var nowPlayingInfo = [String: Any]()
+
+        // Basic info
+        nowPlayingInfo[MPMediaItemPropertyTitle] = currentAudio.name
+        nowPlayingInfo[MPMediaItemPropertyArtist] = "Audio Player"
+        nowPlayingInfo[MPMediaItemPropertyAlbumTitle] = "Playlist"
+
+        // Timing info
+        nowPlayingInfo[MPMediaItemPropertyPlaybackDuration] = duration
+        nowPlayingInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime
+        nowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
+
+        // Track info
+        nowPlayingInfo[MPMediaItemPropertyAlbumTrackNumber] = currentIndex + 1
+        nowPlayingInfo[MPMediaItemPropertyAlbumTrackCount] = audioFiles.count
+
+        // Artwork
+        if let coverImage = currentAudio.coverImage {
+            let artwork = MPMediaItemArtwork(boundsSize: coverImage.size) { _ in
+                return coverImage
+            }
+            nowPlayingInfo[MPMediaItemPropertyArtwork] = artwork
+        }
+
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
+        logger.debug("📱 Now playing info updated for: \(currentAudio.name)")
     }
 
     func selectAudioFiles() {
@@ -423,6 +550,7 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
             audioPlayer?.play()
             isPlaying = true
             startTimer()
+            updateNowPlayingInfo()
             logger.info("▶️ Auto-playing: \(audio.name)")
         } else {
             logger.info("⏸️ Loaded but not playing: \(audio.name)")
@@ -437,6 +565,7 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
             currentAudioName = url.lastPathComponent
             duration = audioPlayer?.duration ?? 0
             durationString = formatTime(duration)
+            updateNowPlayingInfo()
             logger.info("✅ Audio loaded successfully: \(url.lastPathComponent)")
         } catch {
             logger.error("❌ Audio loading failed: \(error.localizedDescription)")
@@ -457,6 +586,7 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
             logger.info("▶️ Audio resumed")
         }
         isPlaying.toggle()
+        updateNowPlayingInfo()
         objectWillChange.send()
     }
 
@@ -467,6 +597,7 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
         currentTimeString = "00:00"
         stopTimer()
         isPlaying = false
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         logger.info("⏹️ Audio stopped")
         objectWillChange.send()
     }
@@ -475,6 +606,7 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
         audioPlayer?.currentTime = time
         currentTime = time
         currentTimeString = formatTime(time)
+        updateNowPlayingInfo()
         objectWillChange.send()
     }
 
@@ -636,6 +768,10 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
             guard let self = self, let player = self.audioPlayer else { return }
             self.currentTime = player.currentTime
             self.currentTimeString = self.formatTime(player.currentTime)
+            // Update now playing info every second to sync with system
+            if Int(player.currentTime) % 10 == 0 {
+                self.updateNowPlayingInfo()
+            }
             self.objectWillChange.send()
         }
     }
@@ -661,12 +797,14 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private func extractCoverImage(from url: URL) -> NSImage? {
         let asset = AVURLAsset(url: url)
 
-        // Try to get artwork from metadata
+        // Try to get artwork from metadata using synchronous legacy API for compatibility
         let metadataItems = asset.commonMetadata
         for metadataItem in metadataItems {
-            if metadataItem.commonKey == .commonKeyArtwork,
-               let data = metadataItem.value as? Data {
-                return NSImage(data: data)
+            if metadataItem.commonKey == .commonKeyArtwork {
+                // Use synchronous value access for macOS compatibility
+                if let data = metadataItem.value as? Data {
+                    return NSImage(data: data)
+                }
             }
         }
 
@@ -698,7 +836,6 @@ struct PlayingIndicator: View {
                     .frame(width: 2, height: CGFloat(animationValues[index]) * 16)
                     .animation(
                         Animation.easeInOut(duration: Double.random(in: 0.3...0.8))
-                            .repeatForever(autoreverses: true)
                             .delay(Double(index) * 0.1),
                         value: animationValues[index]
                     )

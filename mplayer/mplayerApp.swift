@@ -6,9 +6,15 @@
 //
 
 import SwiftUI
+import MediaPlayer
 
 @main
 struct mplayerApp: App {
+    init() {
+        // Enable remote control event reception for media control
+        NSApplication.shared.isAutomaticCustomizeTouchBarMenuItemEnabled = true
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
