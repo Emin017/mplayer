@@ -52,6 +52,7 @@ struct AudioFile: Identifiable, Equatable {
     var duration: Double = 0
     var durationString: String = "00:00"
     var coverImage: NSImage? = nil
+    var waveformData: [Float] = []
 }
 
 struct AudioPlayerView: View {
@@ -107,21 +108,42 @@ struct AudioPlayerView: View {
                 }
                 .padding(.horizontal)
 
-                // Progress bar
-                HStack {
-                    Text(playerViewModel.currentTimeString)
-                        .font(.system(size: 14))
-                        .monospacedDigit()
+                // Waveform progress bar
+                VStack(spacing: 8) {
+                    HStack {
+                        Text(playerViewModel.currentTimeString)
+                            .font(.system(size: 14))
+                            .monospacedDigit()
 
-                    Slider(value: $playerViewModel.currentTime, in: 0...playerViewModel.duration, onEditingChanged: { editing in
-                        if !editing {
-                            playerViewModel.seek(to: playerViewModel.currentTime)
-                        }
-                    })
+                        Spacer()
 
-                    Text(playerViewModel.durationString)
-                        .font(.system(size: 14))
-                        .monospacedDigit()
+                        Text(playerViewModel.durationString)
+                            .font(.system(size: 14))
+                            .monospacedDigit()
+                    }
+
+                    if let currentIndex = playerViewModel.currentIndex,
+                        currentIndex < playerViewModel.audioFiles.count,
+                        !playerViewModel.audioFiles[currentIndex].waveformData.isEmpty {
+                        // Show real waveform when audio is loaded and waveform data is available
+                        WaveformView(
+                            waveformData: playerViewModel.audioFiles[currentIndex].waveformData,
+                            currentTime: $playerViewModel.currentTime,
+                            duration: playerViewModel.duration,
+                            onSeek: { time in
+                                playerViewModel.seek(to: time)
+                            }
+                        )
+                    } else {
+                        // Show empty waveform when no audio is loaded or no waveform data
+                        EmptyWaveformView(
+                            currentTime: $playerViewModel.currentTime,
+                            duration: playerViewModel.duration,
+                            onSeek: { time in
+                                playerViewModel.seek(to: time)
+                            }
+                        )
+                    }
                 }
                 .padding(.horizontal)
 
@@ -592,6 +614,8 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
                     }
                     // Extract cover image
                     newAudio.coverImage = extractCoverImage(from: url)
+                    // Generate waveform data
+                    newAudio.waveformData = generateWaveformData(from: url)
                     audioFiles.append(newAudio)
                     logger.debug("➕ Added audio file: \(newAudio.name)")
                 } else {
@@ -913,6 +937,62 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
         logger.debug("🖼️ No cover image found for: \(url.lastPathComponent)")
         return nil
     }
+
+    // Generate waveform data from audio file
+    private func generateWaveformData(from url: URL) -> [Float] {
+        logger.debug("🌊 Generating waveform data for: \(url.lastPathComponent)")
+
+        guard let audioFile = try? AVAudioFile(forReading: url) else {
+            logger.error("❌ Failed to read audio file for waveform: \(url.lastPathComponent)")
+            return []
+        }
+
+        let format = audioFile.processingFormat
+        let frameCount = UInt32(audioFile.length)
+
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+            logger.error("❌ Failed to create audio buffer for waveform")
+            return []
+        }
+
+        do {
+            try audioFile.read(into: buffer)
+        } catch {
+            logger.error("❌ Failed to read audio data: \(error.localizedDescription)")
+            return []
+        }
+
+        guard let channelData = buffer.floatChannelData?[0] else {
+            logger.error("❌ No audio channel data available")
+            return []
+        }
+
+        let frameLength = Int(buffer.frameLength)
+        let sampleCount = 400 // Number of waveform bars to generate
+        let samplesPerBar = max(1, frameLength / sampleCount)
+
+        var waveformData: [Float] = []
+
+        for i in 0..<sampleCount {
+            let startIndex = i * samplesPerBar
+            let endIndex = min(startIndex + samplesPerBar, frameLength)
+
+            var maxAmplitude: Float = 0
+
+            // Find the maximum amplitude in this sample range
+            for j in startIndex..<endIndex {
+                let amplitude = abs(channelData[j])
+                maxAmplitude = max(maxAmplitude, amplitude)
+            }
+
+            // Normalize to 0.1-1.0 range for better visual appearance
+            let normalizedAmplitude = min(max(maxAmplitude, 0.1), 1.0)
+            waveformData.append(normalizedAmplitude)
+        }
+
+        logger.info("✅ Generated waveform data with \(waveformData.count) points for: \(url.lastPathComponent)")
+        return waveformData
+    }
 }
 
 // View extension for conditional modifiers
@@ -956,6 +1036,174 @@ struct PlayingIndicator: View {
                 }
             }
         }
+    }
+}
+
+// Waveform view component
+struct WaveformView: View {
+    let waveformData: [Float]
+    @Binding var currentTime: Double
+    let duration: Double
+    let onSeek: (Double) -> Void
+
+    @State private var dragLocation: CGFloat = 0
+    @State private var isDragging: Bool = false
+
+    var body: some View {
+        GeometryReader { geometry in
+            Canvas { context, size in
+                guard !waveformData.isEmpty else { return }
+
+                let width = size.width
+                let height = size.height
+                let barWidth = max(1.0, width / CGFloat(waveformData.count))
+                let progress = CGFloat(currentTime / duration)
+
+                for (index, amplitude) in waveformData.enumerated() {
+                    let x = CGFloat(index) * barWidth
+                    let barHeight = CGFloat(amplitude) * height * 0.8
+                    let y = (height - barHeight) / 2
+
+                    let rect = CGRect(x: x, y: y, width: barWidth - 0.5, height: barHeight)
+
+                    // Determine color based on progress
+                    let color: Color = x <= progress * width ? .accentColor : .secondary.opacity(0.5)
+
+                    context.fill(
+                        Path(roundedRect: rect, cornerRadius: barWidth / 4),
+                        with: .color(color)
+                    )
+                }
+
+                // Draw progress line
+                let progressX = progress * width
+                context.stroke(
+                    Path { path in
+                        path.move(to: CGPoint(x: progressX, y: 0))
+                        path.addLine(to: CGPoint(x: progressX, y: height))
+                    },
+                    with: .color(.accentColor),
+                    lineWidth: 2
+                )
+            }
+            .background(Color.clear)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        isDragging = true
+                        dragLocation = value.location.x
+                        let progress = min(max(0, dragLocation / geometry.size.width), 1)
+                        let newTime = progress * duration
+                        currentTime = newTime
+                    }
+                    .onEnded { value in
+                        isDragging = false
+                        let progress = min(max(0, value.location.x / geometry.size.width), 1)
+                        let newTime = progress * duration
+                        onSeek(newTime)
+                    }
+            )
+            .onTapGesture { location in
+                let progress = min(max(0, location.x / geometry.size.width), 1)
+                let newTime = progress * duration
+                onSeek(newTime)
+            }
+        }
+        .frame(height: 60)
+        .cornerRadius(4)
+    }
+}
+
+// Empty waveform view component for when no audio is loaded
+struct EmptyWaveformView: View {
+    @Binding var currentTime: Double
+    let duration: Double
+    let onSeek: (Double) -> Void
+
+    var body: some View {
+        GeometryReader { geometry in
+            Canvas { context, size in
+                let width = size.width
+                let height = size.height
+                let barCount = 400 // Same as WaveformView for consistency
+                let barWidth = max(1.0, width / CGFloat(barCount))
+                let progress = duration > 0 ? CGFloat(currentTime / duration) : 0
+
+                for i in 0..<barCount {
+                    let x = CGFloat(i) * barWidth
+                    // Generate pseudo-random heights based on index for consistent pattern
+                    let randomSeed = sin(Double(i) * 0.1) * cos(Double(i) * 0.05)
+                    let normalizedHeight = (randomSeed + 1.0) / 2.0 // Normalize to 0-1
+                    let barHeight = CGFloat(normalizedHeight) * height * 0.3 + height * 0.1 // Smaller bars for empty state
+                    let y = (height - barHeight) / 2
+
+                    let rect = CGRect(x: x, y: y, width: barWidth - 0.5, height: barHeight)
+
+                    // Determine color based on progress
+                    let color: Color = x <= progress * width ? .accentColor.opacity(0.6) : .secondary.opacity(0.2)
+
+                    context.fill(
+                        Path(roundedRect: rect, cornerRadius: barWidth / 4),
+                        with: .color(color)
+                    )
+                }
+
+                // Draw progress line if there's valid duration
+                if duration > 0 {
+                    let progressX = progress * width
+                    context.stroke(
+                        Path { path in
+                            path.move(to: CGPoint(x: progressX, y: 0))
+                            path.addLine(to: CGPoint(x: progressX, y: height))
+                        },
+                        with: .color(.accentColor.opacity(0.6)),
+                        lineWidth: 2
+                    )
+                }
+            }
+            .background(Color.clear)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        if duration > 0 {
+                            let progress = min(max(0, value.location.x / geometry.size.width), 1)
+                            let newTime = progress * duration
+                            currentTime = newTime
+                        }
+                    }
+                    .onEnded { value in
+                        if duration > 0 {
+                            let progress = min(max(0, value.location.x / geometry.size.width), 1)
+                            let newTime = progress * duration
+                            onSeek(newTime)
+                        }
+                    }
+            )
+            .onTapGesture { location in
+                if duration > 0 {
+                    let progress = min(max(0, location.x / geometry.size.width), 1)
+                    let newTime = progress * duration
+                    onSeek(newTime)
+                }
+            }
+        }
+        .frame(height: 60)
+        .cornerRadius(4)
+        .overlay(
+            // Add a subtle label when no audio is loaded
+            Group {
+                if duration == 0 {
+                    Text("No audio loaded")
+                        .font(.caption)
+                        .foregroundColor(.secondary.opacity(0.6))
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Color(NSColor.controlBackgroundColor).opacity(0.8))
+                                .blur(radius: 2)
+                        )
+                }
+            }
+        )
     }
 }
 
