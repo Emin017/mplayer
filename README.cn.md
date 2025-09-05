@@ -23,7 +23,7 @@
 </div>
 
 > [!NOTE]
-> 本项目采用 vibe coding 进行开发
+> 本项目使用 vibe coding 开发。为提高透明度，我们已将 chathistory 开源。查看 [chathistory](./docs/chathistory/) 文件夹，了解我们如何构建该项目。
 
 ## 功能特性
 
