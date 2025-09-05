@@ -24,7 +24,7 @@ An audio player app built with SwiftUI.
 </div>
 
 > [!NOTE]
-> This project was developed using vibe coding.
+> This project was developed using vibe coding. We opensourced our chathistory for transparency. Check out the [chathistory](./docs/chathistory/) folder to see how we built this project.
 
 ## Features
 

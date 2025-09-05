@@ -67,6 +67,7 @@ struct AudioFile: Identifiable, Equatable {
 struct AudioPlayerView: View {
     @StateObject private var playerViewModel = AudioPlayerViewModel()
     @State private var isEditMode: Bool = false
+    @State private var selectedItems: Set<UUID> = []
 
     var body: some View {
         VStack(spacing: 15) {
@@ -298,10 +299,37 @@ struct AudioPlayerView: View {
                         .foregroundColor(.primary)
                     Spacer()
 
+                    // Batch operation buttons (only shown in edit mode)
+                    if isEditMode {
+                        // Select All / Deselect All button
+                        Button(selectedItems.count == playerViewModel.audioFiles.count ? "Deselect All" : "Select All") {
+                            if selectedItems.count == playerViewModel.audioFiles.count {
+                                selectedItems.removeAll()
+                            } else {
+                                selectedItems = Set(playerViewModel.audioFiles.map { $0.id })
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .font(.caption)
+                        .disabled(playerViewModel.audioFiles.isEmpty)
+
+                        // Delete Selected button
+                        Button("Delete Selected") {
+                            deleteSelectedItems()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .font(.caption)
+                        .disabled(selectedItems.isEmpty)
+                    }
+
                     // Edit mode toggle button
                     Button(isEditMode ? "Done" : "Edit") {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             isEditMode.toggle()
+                            // Clear selections when exiting edit mode
+                            if !isEditMode {
+                                selectedItems.removeAll()
+                            }
                         }
                     }
                     .buttonStyle(.bordered)
@@ -319,6 +347,19 @@ struct AudioPlayerView: View {
                 List {
                     ForEach(Array(playerViewModel.audioFiles.enumerated()), id: \.element.id) { index, audio in
                         HStack {
+                            // Selection indicator (only shown in edit mode)
+                            if isEditMode {
+                                Button(action: {
+                                    toggleSelection(for: audio.id)
+                                }) {
+                                    Image(systemName: selectedItems.contains(audio.id) ? "checkmark.circle.fill" : "circle")
+                                        .foregroundColor(selectedItems.contains(audio.id) ? .accentColor : .secondary)
+                                        .font(.system(size: 20, weight: .medium))
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                                .frame(width: 30)
+                            }
+
                             // Drag indicator (only shown in edit mode)
                             if isEditMode {
                                 Image(systemName: "line.3.horizontal")
@@ -368,10 +409,17 @@ struct AudioPlayerView: View {
                             RoundedRectangle(cornerRadius: 6)
                                 .fill(isEditMode ? Color.accentColor.opacity(0.1) : Color.clear)
                         )
-                        .onTapGesture(count: 2) {
-                            if !isEditMode {
+                        .if(isEditMode) { view in
+                            view.onTapGesture {
+                                // In edit mode: single tap toggles selection
+                                toggleSelection(for: audio.id)
+                            }
+                        }
+                        .if(!isEditMode) { view in
+                            view.onTapGesture(count: 2) {
+                                // In non-edit mode: double tap to play
                                 if let actualIndex = playerViewModel.audioFiles.firstIndex(where: { $0.id == audio.id }) {
-                                    playerViewModel.playAtIndex(actualIndex, autoPlay: true)  // User click: auto-play
+                                    playerViewModel.playAtIndex(actualIndex, autoPlay: true)
                                 }
                             }
                         }
@@ -477,6 +525,32 @@ struct AudioPlayerView: View {
                 .padding(.horizontal)
             }
         }
+    }
+
+    // MARK: - Helper Methods
+
+    private func toggleSelection(for audioId: UUID) {
+        if selectedItems.contains(audioId) {
+            selectedItems.remove(audioId)
+        } else {
+            selectedItems.insert(audioId)
+        }
+    }
+
+    private func deleteSelectedItems() {
+        // Convert selected UUIDs to indices
+        let selectedIndices = playerViewModel.audioFiles.enumerated().compactMap { index, audio in
+            selectedItems.contains(audio.id) ? index : nil
+        }
+
+        // Create IndexSet from selected indices
+        let indexSet = IndexSet(selectedIndices)
+
+        // Remove the selected items
+        playerViewModel.removeAudio(at: indexSet)
+
+        // Clear selection after deletion
+        selectedItems.removeAll()
     }
 }
 
