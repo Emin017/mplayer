@@ -54,6 +54,8 @@ struct AudioFile: Identifiable, Equatable {
     var durationString: String = "00:00"
     var coverImage: NSImage? = nil
     var waveformData: [Float] = []
+    var isWaveformGenerated: Bool = false
+    var isProcessing: Bool = false
 
     // Audio format information
     var format: String = "Unknown"
@@ -164,19 +166,40 @@ struct AudioPlayerView: View {
                     }
 
                     if let currentIndex = playerViewModel.currentIndex,
-                        currentIndex < playerViewModel.audioFiles.count,
-                        !playerViewModel.audioFiles[currentIndex].waveformData.isEmpty {
-                        // Show real waveform when audio is loaded and waveform data is available
-                        WaveformView(
-                            waveformData: playerViewModel.audioFiles[currentIndex].waveformData,
-                            currentTime: $playerViewModel.currentTime,
-                            duration: playerViewModel.duration,
-                            onSeek: { time in
-                                playerViewModel.seek(to: time)
-                            }
-                        )
+                        currentIndex < playerViewModel.audioFiles.count {
+                        let currentAudio = playerViewModel.audioFiles[currentIndex]
+
+                        if !currentAudio.waveformData.isEmpty {
+                            // Show real waveform when waveform data is available
+                            WaveformView(
+                                waveformData: currentAudio.waveformData,
+                                currentTime: $playerViewModel.currentTime,
+                                duration: playerViewModel.duration,
+                                onSeek: { time in
+                                    playerViewModel.seek(to: time)
+                                }
+                            )
+                        } else if currentAudio.isProcessing {
+                            // Show loading waveform when waveform is being generated
+                            LoadingWaveformView(
+                                currentTime: $playerViewModel.currentTime,
+                                duration: playerViewModel.duration,
+                                onSeek: { time in
+                                    playerViewModel.seek(to: time)
+                                }
+                            )
+                        } else {
+                            // Show placeholder waveform when no waveform generation has started
+                            PlaceholderWaveformView(
+                                currentTime: $playerViewModel.currentTime,
+                                duration: playerViewModel.duration,
+                                onSeek: { time in
+                                    playerViewModel.seek(to: time)
+                                }
+                            )
+                        }
                     } else {
-                        // Show empty waveform when no audio is loaded or no waveform data
+                        // Show empty waveform when no audio is loaded
                         EmptyWaveformView(
                             currentTime: $playerViewModel.currentTime,
                             duration: playerViewModel.duration,
@@ -289,6 +312,43 @@ struct AudioPlayerView: View {
             )
             .padding(.horizontal)
 
+            // Loading progress indicator
+            if playerViewModel.isLoadingFiles {
+                VStack(spacing: 8) {
+                    HStack {
+                        Text("Loading audio files...")
+                            .font(.headline)
+                            .foregroundColor(.primary)
+                        Spacer()
+                        Text("\(Int(playerViewModel.loadingProgress * 100))%")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+
+                    ProgressView(value: playerViewModel.loadingProgress)
+                        .progressViewStyle(LinearProgressViewStyle(tint: .accentColor))
+
+                    if !playerViewModel.loadingFileName.isEmpty {
+                        Text("Processing: \(playerViewModel.loadingFileName)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                .padding()
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Color(NSColor.controlBackgroundColor).opacity(0.3))
+                        )
+                )
+                .padding(.horizontal)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+
             // Playlist area
             VStack(alignment: .leading, spacing: 10) {
                 // Playlist title
@@ -345,170 +405,48 @@ struct AudioPlayerView: View {
 
                 // Playlist
                 List {
-                    ForEach(Array(playerViewModel.audioFiles.enumerated()), id: \.element.id) { index, audio in
-                        HStack {
-                            // Selection indicator (only shown in edit mode)
-                            if isEditMode {
-                                Button(action: {
-                                    toggleSelection(for: audio.id)
-                                }) {
-                                    Image(systemName: selectedItems.contains(audio.id) ? "checkmark.circle.fill" : "circle")
-                                        .foregroundColor(selectedItems.contains(audio.id) ? .accentColor : .secondary)
-                                        .font(.system(size: 20, weight: .medium))
-                                }
-                                .buttonStyle(PlainButtonStyle())
-                                .frame(width: 30)
-                            }
-
-                            // Drag indicator (only shown in edit mode)
-                            if isEditMode {
-                                Image(systemName: "line.3.horizontal")
-                                    .foregroundColor(.accentColor)
-                                    .font(.system(size: 14, weight: .medium))
-                                    .frame(width: 20)
-                                    .help("Drag to reorder") // macOS tooltip text
-                            }
-
-                            // Play index number
-                            Text("\(index + 1)")
-                                .font(.system(size: 12))
-                                .foregroundColor(.secondary)
-                                .frame(width: 25, alignment: .trailing)
-
-                            // Play status indicator
-                            Group {
-                                if let currentIndex = playerViewModel.currentIndex,
-                                    playerViewModel.audioFiles[currentIndex].id == audio.id && playerViewModel.isPlaying {
-                                    // Dynamic playing indicator
-                                    PlayingIndicator()
-                                        .frame(width: 20, height: 16)
-                                } else if let currentIndex = playerViewModel.currentIndex,
-                                        playerViewModel.audioFiles[currentIndex].id == audio.id {
-                                    // Pause status indicator
-                                    Image(systemName: "pause.fill")
-                                        .foregroundColor(.accentColor)
-                                        .frame(width: 20, height: 16)
-                                } else {
-                                    // Empty placeholder
-                                    Spacer()
-                                        .frame(width: 20, height: 16)
-                                }
-                            }
-
-                            Text(audio.name)
-                                .font(.system(size: 14))
-                                .foregroundColor(playerViewModel.currentIndex != nil && playerViewModel.audioFiles[playerViewModel.currentIndex!].id == audio.id ? .accentColor : .primary)
-                            Spacer()
-                            Text(audio.durationString)
-                                .font(.system(size: 12))
-                                .foregroundColor(.secondary)
-                        }
-                        .padding(.vertical, 4)
-                        .contentShape(Rectangle())
-                        .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(isEditMode ? Color.accentColor.opacity(0.1) : Color.clear)
-                        )
-                        .if(isEditMode) { view in
-                            view.onTapGesture {
-                                // In edit mode: single tap toggles selection
-                                toggleSelection(for: audio.id)
-                            }
-                        }
-                        .if(!isEditMode) { view in
-                            view.onTapGesture(count: 2) {
-                                // In non-edit mode: double tap to play
+                    ForEach(playerViewModel.audioFiles.indices, id: \.self) { index in
+                        let audio = playerViewModel.audioFiles[index]
+                        AudioRowView(
+                            audio: audio,
+                            index: index,
+                            isEditMode: isEditMode,
+                            isSelected: selectedItems.contains(audio.id),
+                            isCurrentlyPlaying: playerViewModel.currentIndex == index && playerViewModel.isPlaying,
+                            isCurrentTrack: playerViewModel.currentIndex == index,
+                            onSelectionToggle: { toggleSelection(for: audio.id) },
+                            onPlayAction: {
                                 if let actualIndex = playerViewModel.audioFiles.firstIndex(where: { $0.id == audio.id }) {
                                     playerViewModel.playAtIndex(actualIndex, autoPlay: true)
                                 }
-                            }
-                        }
-                        .contextMenu {
-                            Button("Move Up") {
+                            },
+                            onMoveUp: {
                                 if let actualIndex = playerViewModel.audioFiles.firstIndex(where: { $0.id == audio.id }) {
                                     playerViewModel.moveAudioUp(from: actualIndex)
                                 }
-                            }
-                            .disabled(index == 0)
-
-                            Button("Move Down") {
+                            },
+                            onMoveDown: {
                                 if let actualIndex = playerViewModel.audioFiles.firstIndex(where: { $0.id == audio.id }) {
                                     playerViewModel.moveAudioDown(from: actualIndex)
                                 }
-                            }
-                            .disabled(index == playerViewModel.audioFiles.count - 1)
-
-                            Divider()
-
-                            Button("Move to Top") {
+                            },
+                            onMoveToTop: {
                                 if let actualIndex = playerViewModel.audioFiles.firstIndex(where: { $0.id == audio.id }) {
                                     playerViewModel.moveAudioToTop(from: actualIndex)
                                 }
-                            }
-                            .disabled(index == 0)
-
-                            Button("Move to Bottom") {
+                            },
+                            onMoveToBottom: {
                                 if let actualIndex = playerViewModel.audioFiles.firstIndex(where: { $0.id == audio.id }) {
                                     playerViewModel.moveAudioToBottom(from: actualIndex)
                                 }
-                            }
-                            .disabled(index == playerViewModel.audioFiles.count - 1)
-
-                            Divider()
-
-                            Button("Remove from List", role: .destructive) {
+                            },
+                            onRemove: {
                                 if let actualIndex = playerViewModel.audioFiles.firstIndex(where: { $0.id == audio.id }) {
                                     playerViewModel.removeAudio(at: IndexSet([actualIndex]))
                                 }
-                            }
-                        }
-                        .if(isEditMode) { view in
-                            view.draggable(audio.id.uuidString) {
-                                // Drag preview
-                                HStack {
-                                    Image(systemName: "music.note")
-                                    Text(audio.name)
-                                        .lineLimit(1)
-                                }
-                                .padding(8)
-                                .background(Color.accentColor.opacity(0.2))
-                                .cornerRadius(8)
-                            }
-                            .dropDestination(for: String.self) { items, location in
-                                logger.debug("🎯 Drop triggered: item count \(items.count)")
-
-                                // Only handle drag and drop in edit mode
-                                guard isEditMode,
-                                        let draggedIdString = items.first,
-                                        let draggedId = UUID(uuidString: draggedIdString),
-                                        draggedId != audio.id else {
-                                    logger.info("❌ Drop rejected: edit mode=\(isEditMode), valid ID=\(items.first != nil)")
-                                    return false
-                                }
-
-                                logger.debug("🔍 Drag ID: \(draggedIdString), target audio: \(audio.name)")
-
-                                // Find source and target indices
-                                guard let sourceIndex = playerViewModel.audioFiles.firstIndex(where: { $0.id == draggedId }),
-                                      let targetIndex = playerViewModel.audioFiles.firstIndex(where: { $0.id == audio.id }) else {
-                                    logger.error("❌ Indices not found")
-                                    return false
-                                }
-
-                                logger.info("📍 Source index: \(sourceIndex), target index: \(targetIndex)")
-
-                                // Call simple move method directly
-                                withAnimation(.easeInOut(duration: 0.3)) {
-                                    playerViewModel.moveAudioFromTo(from: sourceIndex, to: targetIndex)
-                                }
-
-                                return true
-                            } isTargeted: { isTargeted in
-                                if isTargeted {
-                                    logger.debug("🎯 Drag hovering over: \(audio.name)")
-                                }
-                            }
-                        }
+                            },
+                            playerViewModel: playerViewModel
+                        )
                     }
                     .onDelete(perform: playerViewModel.removeAudio)
                 }
@@ -564,6 +502,9 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published var currentTimeString: String = "00:00"
     @Published var durationString: String = "00:00"
     @Published var repeatMode: RepeatMode = .none
+    @Published var isLoadingFiles: Bool = false
+    @Published var loadingProgress: Double = 0
+    @Published var loadingFileName: String = ""
 
     private var audioPlayer: AVAudioPlayer?
     private var timer: Timer?
@@ -571,16 +512,107 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
     // Logger instance
     private let logger = Logger(subsystem: "com.mplayer.audioPlayer", category: "AudioPlayerViewModel")
 
+    // Waveform cache directory
+    private lazy var waveformCacheDirectory: URL = {
+        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        let waveformCacheDir = cacheDir.appendingPathComponent("WaveformCache")
+
+        // Create cache directory if it doesn't exist
+        try? FileManager.default.createDirectory(at: waveformCacheDir, withIntermediateDirectories: true)
+
+        return waveformCacheDir
+    }()
+
     override init() {
         super.init()
         NotificationCenter.default.addObserver(self, selector: #selector(handleAudioDidFinishPlaying), name: .AVPlayerItemDidPlayToEndTime, object: nil)
         setupRemoteTransportControls()
+
+        // Clean up old cached waveform files on startup
+        cleanupWaveformCache()
     }
 
     deinit {
         NotificationCenter.default.removeObserver(self)
     }
     
+    // MARK: - Waveform Caching
+
+    // Generate cache key from audio file URL and modification date
+    private func waveformCacheKey(for url: URL) -> String? {
+        do {
+            let resourceValues = try url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+            let modificationDate = resourceValues.contentModificationDate?.timeIntervalSince1970 ?? 0
+            let fileSize = resourceValues.fileSize ?? 0
+
+            // Create a unique key based on file path, size, and modification date
+            let keyString = "\(url.path)-\(fileSize)-\(Int(modificationDate))"
+            return keyString.data(using: .utf8)?.base64EncodedString()
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "+", with: "-")
+        } catch {
+            logger.error("❌ Failed to get file attributes for cache key: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    // Load waveform data from cache
+    private func loadCachedWaveformData(for url: URL) -> [Float]? {
+        guard let cacheKey = waveformCacheKey(for: url) else { return nil }
+
+        let cacheFileURL = waveformCacheDirectory.appendingPathComponent("\(cacheKey).waveform")
+
+        do {
+            let data = try Data(contentsOf: cacheFileURL)
+            let waveformData = try JSONDecoder().decode([Float].self, from: data)
+            logger.debug("💾 Loaded cached waveform data for: \(url.lastPathComponent)")
+            return waveformData
+        } catch {
+            logger.debug("🔍 No cached waveform data found for: \(url.lastPathComponent)")
+            return nil
+        }
+    }
+
+    // Save waveform data to cache
+    private func saveCachedWaveformData(_ waveformData: [Float], for url: URL) {
+        guard let cacheKey = waveformCacheKey(for: url) else { return }
+
+        let cacheFileURL = waveformCacheDirectory.appendingPathComponent("\(cacheKey).waveform")
+
+        do {
+            let data = try JSONEncoder().encode(waveformData)
+            try data.write(to: cacheFileURL)
+            logger.debug("💾 Cached waveform data for: \(url.lastPathComponent)")
+        } catch {
+            logger.error("❌ Failed to cache waveform data: \(error.localizedDescription)")
+        }
+    }
+
+    // Clean up old cache files (call periodically)
+    func cleanupWaveformCache() {
+        DispatchQueue.global(qos: .utility).async {
+            do {
+                let cacheFiles = try FileManager.default.contentsOfDirectory(at: self.waveformCacheDirectory, includingPropertiesForKeys: [.contentModificationDateKey])
+                let oneWeekAgo = Date().addingTimeInterval(-7 * 24 * 60 * 60)
+
+                var removedCount = 0
+                for fileURL in cacheFiles {
+                    if let modificationDate = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+                       modificationDate < oneWeekAgo {
+                        try? FileManager.default.removeItem(at: fileURL)
+                        removedCount += 1
+                    }
+                }
+
+                if removedCount > 0 {
+                    self.logger.info("🧹 Cleaned up \(removedCount) old waveform cache files")
+                }
+            } catch {
+                self.logger.error("❌ Error cleaning up waveform cache: \(error.localizedDescription)")
+            }
+        }
+    }
+
     @objc private func handleAudioDidFinishPlaying() {
         playNext()
     }
@@ -676,7 +708,7 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
     // MARK: - Now Playing Info
     private func updateNowPlayingInfo() {
         guard let currentIndex = currentIndex,
-              currentIndex < audioFiles.count else {
+                currentIndex < audioFiles.count else {
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
             return
         }
@@ -717,52 +749,259 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
         panel.canChooseDirectories = false
 
         if panel.runModal() == .OK {
-            let urls = panel.urls
-            logger.info("📁 Selected \(urls.count) audio files")
-            for url in urls {
-                if !audioFiles.contains(where: { $0.url == url }) {
-                    var newAudio = AudioFile(url: url, name: url.lastPathComponent)
-                    if let player = try? AVAudioPlayer(contentsOf: url) {
-                        newAudio.duration = player.duration
-                        newAudio.durationString = formatTime(player.duration)
-                    }
-                    // Extract cover image
-                    newAudio.coverImage = extractCoverImage(from: url)
-                    // Generate waveform data
-                    newAudio.waveformData = generateWaveformData(from: url)
-                    // Extract audio format information
-                    newAudio = extractAudioFormatInfo(for: newAudio)
-                    audioFiles.append(newAudio)
-                    logger.debug("➕ Added audio file: \(newAudio.name)")
-                } else {
-                    logger.debug("⚠️ Skipped duplicate file: \(url.lastPathComponent)")
-                }
+            let urls = panel.urls.filter { url in
+                !audioFiles.contains(where: { $0.url == url })
             }
-            if currentIndex == nil && !audioFiles.isEmpty {
-                playAtIndex(0, autoPlay: false)  // First load: don't auto-play
+
+            guard !urls.isEmpty else {
+                logger.debug("❌ No new files to add")
+                return
+            }
+
+            logger.info("📁 Selected \(urls.count) new audio files")
+
+            // Show loading indicator
+            DispatchQueue.main.async {
+                self.isLoadingFiles = true
+                self.loadingProgress = 0
+                self.loadingFileName = ""
+            }
+
+            // Process files in background
+            DispatchQueue.global(qos: .userInitiated).async {
+                self.processAudioFiles(urls: urls)
             }
         } else {
             logger.debug("❌ Audio file selection cancelled")
         }
-        objectWillChange.send()
+    }
+
+    private func processAudioFiles(urls: [URL]) {
+        let totalFiles = urls.count
+        var processedFiles = 0
+        var newAudioFiles: [AudioFile] = []
+
+        for url in urls {
+            autoreleasepool {
+                processedFiles += 1
+                let progress = Double(processedFiles) / Double(totalFiles)
+
+                // Update progress on main thread
+                DispatchQueue.main.async {
+                    self.loadingProgress = progress
+                    self.loadingFileName = url.lastPathComponent
+                }
+
+                // Create basic audio file with minimal processing
+                var newAudio = AudioFile(url: url, name: url.lastPathComponent)
+                newAudio.isProcessing = true
+
+                // Extract only essential metadata (lightweight operations)
+                self.extractBasicMetadata(for: &newAudio)
+
+                // Extract audio format info (still needed for display)
+                newAudio = self.extractAudioFormatInfo(for: newAudio)
+
+                // Mark as not processing basic info
+                newAudio.isProcessing = false
+
+                newAudioFiles.append(newAudio)
+                self.logger.debug("➕ Processed basic info for: \(newAudio.name)")
+            }
+        }
+
+        // Add all processed files to the main array on main thread
+        DispatchQueue.main.async {
+            self.audioFiles.append(contentsOf: newAudioFiles)
+
+            // If this is the first load, set up the first audio
+            if self.currentIndex == nil && !self.audioFiles.isEmpty {
+                self.playAtIndex(0, autoPlay: false)
+            }
+
+            // Hide loading indicator
+            self.isLoadingFiles = false
+            self.loadingProgress = 0
+            self.loadingFileName = ""
+
+            self.logger.info("✅ Added \(newAudioFiles.count) audio files to playlist")
+        }
+
+        // Process cover images for all files in background (lower priority)
+        DispatchQueue.global(qos: .background).async {
+            self.processSecondaryData(for: newAudioFiles)
+        }
+
+        // Start generating waveforms for all files in background
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            self.generateAllWaveforms()
+        }
+    }
+
+    private func extractBasicMetadata(for audioFile: inout AudioFile) {
+        // Only extract essential metadata - duration
+        do {
+            let player = try AVAudioPlayer(contentsOf: audioFile.url)
+            audioFile.duration = player.duration
+            audioFile.durationString = formatTime(player.duration)
+        } catch {
+            logger.error("❌ Failed to extract basic metadata: \(error.localizedDescription)")
+            audioFile.duration = 0
+            audioFile.durationString = "00:00"
+        }
+    }
+
+    private func processSecondaryData(for audioFiles: [AudioFile]) {
+        // Process cover images for all files (but don't block UI)
+        logger.debug("🖼️ Starting to process cover images for \(audioFiles.count) files")
+
+        for audioFile in audioFiles {
+            autoreleasepool {
+                // Only process if the file still exists in our array and doesn't have a cover yet
+                if let index = self.audioFiles.firstIndex(where: { $0.id == audioFile.id }),
+                    self.audioFiles[index].coverImage == nil {
+
+                    let coverImage = self.extractCoverImage(from: audioFile.url)
+
+                    DispatchQueue.main.async {
+                        // Double-check the index is still valid (user might have deleted files)
+                        if index < self.audioFiles.count &&
+                            self.audioFiles[index].id == audioFile.id {
+                            self.audioFiles[index].coverImage = coverImage
+                            if coverImage != nil {
+                                self.logger.debug("🖼️ Updated cover image for: \(audioFile.name)")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        logger.debug("🖼️ Finished processing cover images")
+    }
+
+    // Enhanced waveform generation with preloading support and caching
+    func generateWaveformIfNeeded(for index: Int, priority: DispatchQoS.QoSClass = .utility) {
+        guard index < audioFiles.count else { return }
+        let audioFile = audioFiles[index]
+
+        // Skip if already generated or currently generating
+        guard !audioFile.isWaveformGenerated && !audioFile.isProcessing else { return }
+
+        // Mark as processing to prevent duplicate requests
+        audioFiles[index].isProcessing = true
+
+        // Generate waveform in background with configurable priority
+        DispatchQueue.global(qos: priority).async {
+            // First, try to load from cache
+            var waveformData = self.loadCachedWaveformData(for: audioFile.url)
+
+            if waveformData == nil {
+                // Generate new waveform data if not in cache
+                waveformData = self.generateWaveformData(from: audioFile.url)
+
+                // Cache the generated data
+                if let data = waveformData, !data.isEmpty {
+                    self.saveCachedWaveformData(data, for: audioFile.url)
+                }
+            }
+
+            DispatchQueue.main.async {
+                // Ensure the index is still valid (user might have deleted files)
+                if index < self.audioFiles.count && self.audioFiles[index].id == audioFile.id {
+                    self.audioFiles[index].waveformData = waveformData ?? []
+                    self.audioFiles[index].isWaveformGenerated = true
+                    self.audioFiles[index].isProcessing = false
+                    self.logger.debug("✅ Waveform ready for: \(audioFile.name)")
+                }
+            }
+        }
+    }
+
+    // Conservative preload strategy - only preload next 1-2 tracks
+    private func preloadNextTrackOnly(currentIndex: Int) {
+        logger.info("🔄 Starting conservative preload for current index: \(currentIndex)")
+
+        // Only preload next track with very low priority
+        DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 1.0) {
+            if currentIndex + 1 < self.audioFiles.count {
+                self.logger.debug("📝 Preloading next track at index \(currentIndex + 1)")
+                self.generateWaveformIfNeeded(for: currentIndex + 1, priority: .background)
+
+                // Optionally preload the track after next (with even more delay)
+                DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 3.0) {
+                    if currentIndex + 2 < self.audioFiles.count {
+                        self.logger.debug("📝 Preloading track after next at index \(currentIndex + 2)")
+                        self.generateWaveformIfNeeded(for: currentIndex + 2, priority: .background)
+                    }
+                }
+            }
+        }
+    }
+
+    // Completely disable bulk waveform generation to prevent system overload
+    func generateAllWaveforms() {
+        logger.info("🚫 Bulk waveform generation disabled to prevent performance issues")
+        // Only generate waveforms on-demand when tracks are played or preloaded
     }
 
     func playAtIndex(_ index: Int, autoPlay: Bool = true) {
+        // Stop all animations immediately using centralized manager
+        PlayingIndicatorManager.shared.stopAllAnimations()
+
+        // Immediately stop and reset state on main thread - no async wrapper to prevent race conditions
         stop()
         currentIndex = index
         let audio = audioFiles[index]
         logger.info("🎵 Loading audio at index \(index): \(audio.name)")
-        setupAudioPlayer(with: audio.url)
 
-        if autoPlay {
-            // Auto play after loading
-            audioPlayer?.play()
-            isPlaying = true
-            startTimer()
-            updateNowPlayingInfo()
-            logger.info("▶️ Auto-playing: \(audio.name)")
-        } else {
-            logger.info("⏸️ Loaded but not playing: \(audio.name)")
+        // Immediately generate waveform for current track to avoid delay
+        generateWaveformIfNeeded(for: index, priority: .userInitiated)
+
+        // Move audio player setup to background to prevent main thread blocking
+        DispatchQueue.global(qos: .userInitiated).async {
+            self.setupAudioPlayer(with: audio.url)
+
+            DispatchQueue.main.async {
+                if autoPlay {
+                    // Auto play after loading
+                    self.audioPlayer?.play()
+                    self.isPlaying = true
+                    self.startTimer()
+                    self.updateNowPlayingInfo()
+                    self.logger.info("▶️ Auto-playing: \(audio.name)")
+                } else {
+                    self.logger.info("⏸️ Loaded but not playing: \(audio.name)")
+                }
+            }
+        }
+
+        // Load cover image immediately for current song if not already loaded
+        if audioFiles[index].coverImage == nil {
+            loadCoverImageForCurrent(index: index)
+        }
+
+        // Use conservative preload strategy for adjacent tracks only
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            self.preloadNextTrackOnly(currentIndex: index)
+        }
+    }
+
+    // Load cover image immediately for currently playing song
+    private func loadCoverImageForCurrent(index: Int) {
+        guard index < audioFiles.count else { return }
+        let audioFile = audioFiles[index]
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let coverImage = self.extractCoverImage(from: audioFile.url)
+
+            DispatchQueue.main.async {
+                // Ensure the index is still valid and the same audio file
+                if index < self.audioFiles.count && self.audioFiles[index].id == audioFile.id {
+                    self.audioFiles[index].coverImage = coverImage
+                    self.logger.debug("🖼️ Loaded cover image for current song: \(audioFile.name)")
+                }
+            }
         }
     }
 
@@ -771,16 +1010,22 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
             audioPlayer = try AVAudioPlayer(contentsOf: url)
             audioPlayer?.delegate = self
             audioPlayer?.prepareToPlay()
-            currentAudioName = url.lastPathComponent
-            duration = audioPlayer?.duration ?? 0
-            durationString = formatTime(duration)
-            updateNowPlayingInfo()
+
+            // Update UI on main thread
+            DispatchQueue.main.async {
+                self.currentAudioName = url.lastPathComponent
+                self.duration = self.audioPlayer?.duration ?? 0
+                self.durationString = self.formatTime(self.duration)
+                self.updateNowPlayingInfo()
+            }
+
             logger.info("✅ Audio loaded successfully: \(url.lastPathComponent)")
         } catch {
             logger.error("❌ Audio loading failed: \(error.localizedDescription)")
-            currentAudioName = "Audio loading failed"
+            DispatchQueue.main.async {
+                self.currentAudioName = "Audio loading failed"
+            }
         }
-        objectWillChange.send()
     }
 
     func playPause() {
@@ -796,10 +1041,12 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
         }
         isPlaying.toggle()
         updateNowPlayingInfo()
-        objectWillChange.send()
     }
 
     func stop() {
+        // Stop all animations using centralized manager
+        PlayingIndicatorManager.shared.stopAllAnimations()
+
         audioPlayer?.stop()
         audioPlayer?.currentTime = 0
         currentTime = 0
@@ -808,7 +1055,6 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
         isPlaying = false
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         logger.info("⏹️ Audio stopped")
-        objectWillChange.send()
     }
 
     func seek(to time: Double) {
@@ -816,14 +1062,12 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
         currentTime = time
         currentTimeString = formatTime(time)
         updateNowPlayingInfo()
-        objectWillChange.send()
     }
 
     func playPrevious() {
         if let index = currentIndex, index > 0 {
             playAtIndex(index - 1, autoPlay: true)  // Previous/Next: auto-play
         }
-        objectWillChange.send()
     }
 
     func playNext() {
@@ -851,7 +1095,6 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
                 logger.info("⏹️ End of playlist: stopping")
             }
         }
-        objectWillChange.send()
     }
 
     func removeAudio(at offsets: IndexSet) {
@@ -864,7 +1107,6 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
         } else if let current = currentIndex, current >= audioFiles.count {
             currentIndex = audioFiles.count - 1
         }
-        objectWillChange.send()
     }
 
     func moveAudio(from source: IndexSet, to destination: Int) {
@@ -882,7 +1124,6 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
             currentIndex = audioFiles.firstIndex(where: { $0.id == playingId })
         }
 
-        objectWillChange.send()
     }
 
     // Simplified drag move method
@@ -919,7 +1160,6 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
             currentIndex = audioFiles.firstIndex(where: { $0.id == playingId })
         }
 
-        objectWillChange.send()
     }
 
     // Move up one position
@@ -932,7 +1172,6 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
         // Update current playing index
         updateCurrentIndexAfterMove(originalIndex: index, newIndex: index - 1)
-        objectWillChange.send()
     }
 
     // Move down one position
@@ -945,7 +1184,6 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
         // Update current playing index
         updateCurrentIndexAfterMove(originalIndex: index, newIndex: index + 1)
-        objectWillChange.send()
     }
 
     // Move to top
@@ -958,7 +1196,6 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
         // Update current playing index
         updateCurrentIndexAfterMove(originalIndex: index, newIndex: 0)
-        objectWillChange.send()
     }
 
     // Move to bottom
@@ -971,7 +1208,6 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
         // Update current playing index
         updateCurrentIndexAfterMove(originalIndex: index, newIndex: audioFiles.count - 1)
-        objectWillChange.send()
     }
 
     // Helper method: update current playing index
@@ -992,15 +1228,22 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     private func startTimer() {
-        timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
             guard let self = self, let player = self.audioPlayer else { return }
-            self.currentTime = player.currentTime
-            self.currentTimeString = self.formatTime(player.currentTime)
-            // Update now playing info every second to sync with system
-            if Int(player.currentTime) % 10 == 0 {
-                self.updateNowPlayingInfo()
+
+            let newTime = player.currentTime
+            let newTimeString = self.formatTime(newTime)
+
+            // Only update if values actually changed to reduce UI updates
+            if abs(self.currentTime - newTime) > 0.1 {
+                self.currentTime = newTime
+                self.currentTimeString = newTimeString
+
+                // Update now playing info less frequently (every 4 seconds)
+                if Int(newTime) % 4 == 0 {
+                    self.updateNowPlayingInfo()
+                }
             }
-            self.objectWillChange.send()
         }
     }
 
@@ -1026,7 +1269,6 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
             repeatMode = .none
         }
         logger.info("🔄 Repeat mode changed to: \(self.repeatMode.description)")
-        objectWillChange.send()
     }
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
@@ -1037,77 +1279,155 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     // Extract cover image from audio file
     private func extractCoverImage(from url: URL) -> NSImage? {
-        let asset = AVURLAsset(url: url)
+        do {
+            let asset = AVURLAsset(url: url)
 
-        // Try to get artwork from metadata using synchronous legacy API for compatibility
-        let metadataItems = asset.commonMetadata
-        for metadataItem in metadataItems {
-            if metadataItem.commonKey == .commonKeyArtwork {
-                // Use synchronous value access for macOS compatibility
-                if let data = metadataItem.value as? Data {
-                    return NSImage(data: data)
+            // Try to get artwork from metadata
+            let metadataItems = asset.commonMetadata
+            for metadataItem in metadataItems {
+                if metadataItem.commonKey == .commonKeyArtwork {
+                    // Try different data formats
+                    if let data = metadataItem.value as? Data,
+                       let image = NSImage(data: data) {
+                        logger.debug("🖼️ Successfully extracted cover image for: \(url.lastPathComponent)")
+                        return image
+                    }
+
+                    // Try NSData format (for older files)
+                    if let nsData = metadataItem.value as? NSData,
+                       let image = NSImage(data: nsData as Data) {
+                        logger.debug("🖼️ Successfully extracted cover image (NSData) for: \(url.lastPathComponent)")
+                        return image
+                    }
+
+                    // Try dictionary format (for some file types)
+                    if let dict = metadataItem.value as? [String: Any],
+                       let imageData = dict["data"] as? Data,
+                       let image = NSImage(data: imageData) {
+                        logger.debug("🖼️ Successfully extracted cover image (dict) for: \(url.lastPathComponent)")
+                        return image
+                    }
                 }
             }
-        }
 
-        logger.debug("🖼️ No cover image found for: \(url.lastPathComponent)")
-        return nil
-    }
-
-    // Generate waveform data from audio file
-    private func generateWaveformData(from url: URL) -> [Float] {
-        logger.debug("🌊 Generating waveform data for: \(url.lastPathComponent)")
-
-        guard let audioFile = try? AVAudioFile(forReading: url) else {
-            logger.error("❌ Failed to read audio file for waveform: \(url.lastPathComponent)")
-            return []
-        }
-
-        let format = audioFile.processingFormat
-        let frameCount = UInt32(audioFile.length)
-
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
-            logger.error("❌ Failed to create audio buffer for waveform")
-            return []
-        }
-
-        do {
-            try audioFile.read(into: buffer)
-        } catch {
-            logger.error("❌ Failed to read audio data: \(error.localizedDescription)")
-            return []
-        }
-
-        guard let channelData = buffer.floatChannelData?[0] else {
-            logger.error("❌ No audio channel data available")
-            return []
-        }
-
-        let frameLength = Int(buffer.frameLength)
-        let sampleCount = 400 // Number of waveform bars to generate
-        let samplesPerBar = max(1, frameLength / sampleCount)
-
-        var waveformData: [Float] = []
-
-        for i in 0..<sampleCount {
-            let startIndex = i * samplesPerBar
-            let endIndex = min(startIndex + samplesPerBar, frameLength)
-
-            var maxAmplitude: Float = 0
-
-            // Find the maximum amplitude in this sample range
-            for j in startIndex..<endIndex {
-                let amplitude = abs(channelData[j])
-                maxAmplitude = max(maxAmplitude, amplitude)
+            // Try alternative metadata keys
+            for metadataItem in metadataItems {
+                if let commonKey = metadataItem.commonKey,
+                   commonKey.rawValue.lowercased().contains("artwork") ||
+                   commonKey.rawValue.lowercased().contains("picture") {
+                    if let data = metadataItem.value as? Data,
+                       let image = NSImage(data: data) {
+                        logger.debug("🖼️ Found cover via alternative key for: \(url.lastPathComponent)")
+                        return image
+                    }
+                }
             }
 
-            // Normalize to 0.1-1.0 range for better visual appearance
-            let normalizedAmplitude = min(max(maxAmplitude, 0.1), 1.0)
-            waveformData.append(normalizedAmplitude)
-        }
+            logger.debug("🖼️ No cover image found for: \(url.lastPathComponent)")
+            return nil
 
-        logger.info("✅ Generated waveform data with \(waveformData.count) points for: \(url.lastPathComponent)")
-        return waveformData
+        } catch {
+            logger.error("❌ Error extracting cover image: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    // Optimized waveform generation with memory management
+    private func generateWaveformData(from url: URL) -> [Float] {
+        return autoreleasepool {
+            logger.debug("🌊 Generating waveform data for: \(url.lastPathComponent)")
+
+            guard let audioFile = try? AVAudioFile(forReading: url) else {
+                logger.error("❌ Failed to read audio file for waveform: \(url.lastPathComponent)")
+                return []
+            }
+
+            let format = audioFile.processingFormat
+            let totalFrames = audioFile.length
+            let sampleCount = 400 // Number of waveform bars to generate
+
+            // Calculate chunk size for streaming (process in smaller chunks)
+            let maxChunkSize: AVAudioFrameCount = 4096 * 8 // 32KB chunks
+            let samplesPerBar = max(1, Int(totalFrames) / sampleCount)
+
+            var waveformData: [Float] = []
+            waveformData.reserveCapacity(sampleCount) // Pre-allocate for performance
+
+            // Process audio in chunks to manage memory
+            var processedFrames: AVAudioFramePosition = 0
+            var currentBarIndex = 0
+            var currentBarMax: Float = 0
+            var framesInCurrentBar = 0
+
+            while processedFrames < totalFrames && currentBarIndex < sampleCount {
+                autoreleasepool {
+                    // Calculate chunk size for this iteration
+                    let remainingFrames = totalFrames - processedFrames
+                    let chunkSize = min(maxChunkSize, AVAudioFrameCount(remainingFrames))
+
+                    guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunkSize) else {
+                        logger.error("❌ Failed to create chunk buffer")
+                        return
+                    }
+
+                    do {
+                        audioFile.framePosition = processedFrames
+                        try audioFile.read(into: buffer)
+                    } catch {
+                        logger.error("❌ Failed to read chunk: \(error.localizedDescription)")
+                        return
+                    }
+
+                    guard let channelData = buffer.floatChannelData?[0] else {
+                        logger.error("❌ No channel data in chunk")
+                        return
+                    }
+
+                    let frameLength = Int(buffer.frameLength)
+
+                    // Process samples in this chunk
+                    for i in 0..<frameLength {
+                        let amplitude = abs(channelData[i])
+                        currentBarMax = max(currentBarMax, amplitude)
+                        framesInCurrentBar += 1
+
+                        // Check if we've collected enough samples for current bar
+                        if framesInCurrentBar >= samplesPerBar {
+                            // Normalize and add to waveform data
+                            let normalizedAmplitude = min(max(currentBarMax, 0.1), 1.0)
+                            waveformData.append(normalizedAmplitude)
+
+                            // Reset for next bar
+                            currentBarIndex += 1
+                            currentBarMax = 0
+                            framesInCurrentBar = 0
+
+                            // Exit early if we have enough bars
+                            if currentBarIndex >= sampleCount {
+                                break
+                            }
+                        }
+                    }
+
+                    processedFrames += AVAudioFramePosition(frameLength)
+                }
+            }
+
+            // Handle any remaining partial bar
+            if currentBarIndex < sampleCount && framesInCurrentBar > 0 {
+                let normalizedAmplitude = min(max(currentBarMax, 0.1), 1.0)
+                waveformData.append(normalizedAmplitude)
+                currentBarIndex += 1
+            }
+
+            // Fill any remaining bars with minimal values if needed
+            while waveformData.count < sampleCount {
+                waveformData.append(0.1)
+            }
+
+            logger.info("✅ Generated optimized waveform data with \(waveformData.count) points for: \(url.lastPathComponent)")
+            return waveformData
+        }
     }
 
     // Extract audio format information
@@ -1260,34 +1580,73 @@ extension View {
     }
 }
 
-// Dynamic playing indicator component
+// Centralized animation manager to prevent multiple timer instances
+class PlayingIndicatorManager: ObservableObject {
+    static let shared = PlayingIndicatorManager()
+
+    @Published var animationValues = [0.2, 0.4, 0.8, 0.6, 0.3]
+    @Published var activeTrackId: UUID? = nil
+
+    private var timer: Timer?
+    private let animationQueue = DispatchQueue(label: "PlayingIndicatorManager.animation")
+
+    private init() {}
+
+    func startAnimation(for trackId: UUID) {
+        animationQueue.async { [weak self] in
+            self?.stopAnimation()
+            self?.activeTrackId = trackId
+
+            DispatchQueue.main.async {
+                self?.timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+                    guard self?.activeTrackId == trackId else {
+                        self?.stopAnimation()
+                        return
+                    }
+
+                    withAnimation {
+                        self?.animationValues = (0..<5).map { _ in Double.random(in: 0.2...1.0) }
+                    }
+                }
+            }
+        }
+    }
+
+    func stopAnimation() {
+        activeTrackId = nil
+        timer?.invalidate()
+        timer = nil
+    }
+
+    func stopAllAnimations() {
+        stopAnimation()
+    }
+}
+
+// Simplified playing indicator using centralized state
 struct PlayingIndicator: View {
-    @State private var animationValues = [0.2, 0.4, 0.8, 0.6, 0.3]
+    let trackId: UUID
+    @StateObject private var manager = PlayingIndicatorManager.shared
 
     var body: some View {
         HStack(spacing: 2) {
             ForEach(0..<5) { index in
                 RoundedRectangle(cornerRadius: 1)
                     .fill(Color.accentColor)
-                    .frame(width: 2, height: CGFloat(animationValues[index]) * 16)
+                    .frame(width: 2, height: CGFloat(manager.animationValues[index]) * 16)
                     .animation(
                         Animation.easeInOut(duration: Double.random(in: 0.3...0.8))
                             .delay(Double(index) * 0.1),
-                        value: animationValues[index]
+                        value: manager.animationValues[index]
                     )
             }
         }
         .onAppear {
-            startAnimation()
+            manager.startAnimation(for: trackId)
         }
-    }
-
-    private func startAnimation() {
-        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-            withAnimation {
-                for i in 0..<animationValues.count {
-                    animationValues[i] = Double.random(in: 0.2...1.0)
-                }
+        .onDisappear {
+            if manager.activeTrackId == trackId {
+                manager.stopAnimation()
             }
         }
     }
@@ -1461,8 +1820,359 @@ struct EmptyWaveformView: View {
     }
 }
 
+// Loading waveform view component with animated shimmer effect
+struct LoadingWaveformView: View {
+    @Binding var currentTime: Double
+    let duration: Double
+    let onSeek: (Double) -> Void
+
+    @State private var animationPhase: Double = 0
+
+    var body: some View {
+        GeometryReader { geometry in
+            Canvas { context, size in
+                let width = size.width
+                let height = size.height
+                let barCount = 400
+                let barWidth = max(1.0, width / CGFloat(barCount))
+                let progress = duration > 0 ? CGFloat(currentTime / duration) : 0
+
+                for i in 0..<barCount {
+                    let x = CGFloat(i) * barWidth
+                    // Create shimmer effect with sine wave
+                    let shimmerOffset = sin(animationPhase + Double(i) * 0.1) * 0.3 + 0.5
+                    let baseHeight = sin(Double(i) * 0.05) * 0.2 + 0.3
+                    let barHeight = CGFloat(baseHeight + shimmerOffset * 0.2) * height * 0.6
+                    let y = (height - barHeight) / 2
+
+                    let rect = CGRect(x: x, y: y, width: barWidth - 0.5, height: barHeight)
+
+                    // Animated shimmer colors
+                    let shimmerIntensity = Float(shimmerOffset)
+                    let color: Color = x <= progress * width ?
+                        .accentColor.opacity(0.4 + Double(shimmerIntensity) * 0.4) :
+                        .secondary.opacity(0.2 + Double(shimmerIntensity) * 0.2)
+
+                    context.fill(
+                        Path(roundedRect: rect, cornerRadius: barWidth / 4),
+                        with: .color(color)
+                    )
+                }
+
+                // Progress line
+                if duration > 0 {
+                    let progressX = progress * width
+                    context.stroke(
+                        Path { path in
+                            path.move(to: CGPoint(x: progressX, y: 0))
+                            path.addLine(to: CGPoint(x: progressX, y: height))
+                        },
+                        with: .color(.accentColor.opacity(0.7)),
+                        lineWidth: 2
+                    )
+                }
+            }
+            .background(Color.clear)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        if duration > 0 {
+                            let progress = min(max(0, value.location.x / geometry.size.width), 1)
+                            let newTime = progress * duration
+                            currentTime = newTime
+                        }
+                    }
+                    .onEnded { value in
+                        if duration > 0 {
+                            let progress = min(max(0, value.location.x / geometry.size.width), 1)
+                            let newTime = progress * duration
+                            onSeek(newTime)
+                        }
+                    }
+            )
+            .onTapGesture { location in
+                if duration > 0 {
+                    let progress = min(max(0, location.x / geometry.size.width), 1)
+                    let newTime = progress * duration
+                    onSeek(newTime)
+                }
+            }
+        }
+        .frame(height: 60)
+        .cornerRadius(4)
+        .overlay(
+            Text("Generating waveform...")
+                .font(.caption)
+                .foregroundColor(.secondary.opacity(0.7))
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color(NSColor.controlBackgroundColor).opacity(0.8))
+                        .blur(radius: 2)
+                )
+        )
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
+                animationPhase = .pi * 2
+            }
+        }
+    }
+}
+
+// Placeholder waveform view component with subtle animation
+struct PlaceholderWaveformView: View {
+    @Binding var currentTime: Double
+    let duration: Double
+    let onSeek: (Double) -> Void
+
+    @State private var pulsePhase: Double = 0
+
+    var body: some View {
+        GeometryReader { geometry in
+            Canvas { context, size in
+                let width = size.width
+                let height = size.height
+                let barCount = 400
+                let barWidth = max(1.0, width / CGFloat(barCount))
+                let progress = duration > 0 ? CGFloat(currentTime / duration) : 0
+
+                for i in 0..<barCount {
+                    let x = CGFloat(i) * barWidth
+                    // Simple static pattern with subtle pulse
+                    let basePattern = sin(Double(i) * 0.08) * 0.15 + 0.25
+                    let pulseEffect = sin(pulsePhase) * 0.1 + 1.0
+                    let barHeight = CGFloat(basePattern * pulseEffect) * height * 0.4
+                    let y = (height - barHeight) / 2
+
+                    let rect = CGRect(x: x, y: y, width: barWidth - 0.5, height: barHeight)
+
+                    let color: Color = x <= progress * width ?
+                        .accentColor.opacity(0.3) :
+                        .secondary.opacity(0.15)
+
+                    context.fill(
+                        Path(roundedRect: rect, cornerRadius: barWidth / 4),
+                        with: .color(color)
+                    )
+                }
+
+                // Progress line
+                if duration > 0 {
+                    let progressX = progress * width
+                    context.stroke(
+                        Path { path in
+                            path.move(to: CGPoint(x: progressX, y: 0))
+                            path.addLine(to: CGPoint(x: progressX, y: height))
+                        },
+                        with: .color(.accentColor.opacity(0.5)),
+                        lineWidth: 2
+                    )
+                }
+            }
+            .background(Color.clear)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        if duration > 0 {
+                            let progress = min(max(0, value.location.x / geometry.size.width), 1)
+                            let newTime = progress * duration
+                            currentTime = newTime
+                        }
+                    }
+                    .onEnded { value in
+                        if duration > 0 {
+                            let progress = min(max(0, value.location.x / geometry.size.width), 1)
+                            let newTime = progress * duration
+                            onSeek(newTime)
+                        }
+                    }
+            )
+            .onTapGesture { location in
+                if duration > 0 {
+                    let progress = min(max(0, location.x / geometry.size.width), 1)
+                    let newTime = progress * duration
+                    onSeek(newTime)
+                }
+            }
+        }
+        .frame(height: 60)
+        .cornerRadius(4)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true)) {
+                pulsePhase = .pi
+            }
+        }
+    }
+}
+
 struct AudioPlayerView_Previews: PreviewProvider {
     static var previews: some View {
         AudioPlayerView()
+    }
+}
+
+// Optimized audio row component for better list performance
+struct AudioRowView: View {
+    let audio: AudioFile
+    let index: Int
+    let isEditMode: Bool
+    let isSelected: Bool
+    let isCurrentlyPlaying: Bool
+    let isCurrentTrack: Bool
+    let onSelectionToggle: () -> Void
+    let onPlayAction: () -> Void
+    let onMoveUp: () -> Void
+    let onMoveDown: () -> Void
+    let onMoveToTop: () -> Void
+    let onMoveToBottom: () -> Void
+    let onRemove: () -> Void
+    let playerViewModel: AudioPlayerViewModel
+
+    private let logger = Logger(subsystem: "com.mplayer.audioPlayer", category: "AudioRowView")
+
+    var body: some View {
+        HStack {
+            // Selection indicator (only shown in edit mode)
+            if isEditMode {
+                Button(action: onSelectionToggle) {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .foregroundColor(isSelected ? .accentColor : .secondary)
+                        .font(.system(size: 20, weight: .medium))
+                }
+                .buttonStyle(PlainButtonStyle())
+                .frame(width: 30)
+            }
+
+            // Drag indicator (only shown in edit mode)
+            if isEditMode {
+                Image(systemName: "line.3.horizontal")
+                    .foregroundColor(.accentColor)
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 20)
+                    .help("Drag to reorder")
+            }
+
+            // Play index number
+            Text("\(index + 1)")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+                .frame(width: 25, alignment: .trailing)
+
+            // Play status indicator
+            Group {
+                if isCurrentlyPlaying {
+                    PlayingIndicator(trackId: audio.id)
+                        .frame(width: 20, height: 16)
+                } else if isCurrentTrack {
+                    Image(systemName: "pause.fill")
+                        .foregroundColor(.accentColor)
+                        .frame(width: 20, height: 16)
+                } else {
+                    Spacer()
+                        .frame(width: 20, height: 16)
+                }
+            }
+
+            Text(audio.name)
+                .font(.system(size: 14))
+                .foregroundColor(isCurrentTrack ? .accentColor : .primary)
+
+            Spacer()
+
+            Text(audio.durationString)
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+        }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isEditMode ? Color.accentColor.opacity(0.1) : Color.clear)
+        )
+        .if(isEditMode) { view in
+            view.onTapGesture {
+                onSelectionToggle()
+            }
+        }
+        .if(!isEditMode) { view in
+            view.onTapGesture(count: 2) {
+                onPlayAction()
+            }
+        }
+        .contextMenu {
+            Button("Move Up") {
+                onMoveUp()
+            }
+            .disabled(index == 0)
+
+            Button("Move Down") {
+                onMoveDown()
+            }
+            .disabled(index == playerViewModel.audioFiles.count - 1)
+
+            Divider()
+
+            Button("Move to Top") {
+                onMoveToTop()
+            }
+            .disabled(index == 0)
+
+            Button("Move to Bottom") {
+                onMoveToBottom()
+            }
+            .disabled(index == playerViewModel.audioFiles.count - 1)
+
+            Divider()
+
+            Button("Remove from List", role: .destructive) {
+                onRemove()
+            }
+        }
+        .if(isEditMode) { view in
+            view.draggable(audio.id.uuidString) {
+                // Drag preview
+                HStack {
+                    Image(systemName: "music.note")
+                    Text(audio.name)
+                        .lineLimit(1)
+                }
+                .padding(8)
+                .background(Color.accentColor.opacity(0.2))
+                .cornerRadius(8)
+            }
+            .dropDestination(for: String.self) { items, location in
+                logger.debug("🎯 Drop triggered: item count \(items.count)")
+
+                // Only handle drag and drop in edit mode
+                guard isEditMode,
+                        let draggedIdString = items.first,
+                        let draggedId = UUID(uuidString: draggedIdString),
+                        draggedId != audio.id else {
+                    logger.info("❌ Drop rejected: edit mode=\(isEditMode), valid ID=\(items.first != nil)")
+                    return false
+                }
+
+                logger.debug("🔍 Drag ID: \(draggedIdString), target audio: \(audio.name)")
+
+                // Find source and target indices
+                guard let sourceIndex = playerViewModel.audioFiles.firstIndex(where: { $0.id == draggedId }),
+                      let targetIndex = playerViewModel.audioFiles.firstIndex(where: { $0.id == audio.id }) else {
+                    logger.error("❌ Indices not found")
+                    return false
+                }
+
+                logger.info("📍 Source index: \(sourceIndex), target index: \(targetIndex)")
+
+                // Call simple move method directly
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    playerViewModel.moveAudioFromTo(from: sourceIndex, to: targetIndex)
+                }
+
+                return true
+            } isTargeted: { isTargeted in
+                if isTargeted {
+                    logger.debug("🎯 Drag hovering over: \(audio.name)")
+                }
+            }
+        }
     }
 }
