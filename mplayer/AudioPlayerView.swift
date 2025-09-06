@@ -616,7 +616,9 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     @objc private func handleAudioDidFinishPlaying() {
-        playNext()
+        // This notification is handled by the AVAudioPlayerDelegate method
+        // Avoid duplicate calls to prevent state racing
+        logger.debug("🎵 Audio did finish playing notification received")
     }
 
     // MARK: - Remote Transport Controls Setup
@@ -948,20 +950,41 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     func playAtIndex(_ index: Int, autoPlay: Bool = true) {
+        guard index < audioFiles.count else { return }
+
         // Stop all animations immediately using centralized manager
         PlayingIndicatorManager.shared.stopAllAnimations()
 
-        // Immediately stop and reset state on main thread - no async wrapper to prevent race conditions
-        stop()
-        currentIndex = index
         let audio = audioFiles[index]
         logger.info("🎵 Loading audio at index \(index): \(audio.name)")
+
+        // Set current index first to ensure UI consistency
+        currentIndex = index
+        currentAudioName = audio.name
+
+        // Reset playback state to loading state
+        isPlaying = false
+        currentTime = 0
+        currentTimeString = "00:00"
+
+        // Stop timer and clear now playing info during transition
+        stopTimer()
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
 
         // Immediately generate waveform for current track to avoid delay
         generateWaveformIfNeeded(for: index, priority: .userInitiated)
 
+        // Load cover image immediately for current song if not already loaded
+        if audioFiles[index].coverImage == nil {
+            loadCoverImageForCurrent(index: index)
+        }
+
         // Move audio player setup to background to prevent main thread blocking
         DispatchQueue.global(qos: .userInitiated).async {
+            // Stop current player if exists
+            self.audioPlayer?.stop()
+
+            // Setup new audio player
             self.setupAudioPlayer(with: audio.url)
 
             DispatchQueue.main.async {
@@ -973,14 +996,14 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
                     self.updateNowPlayingInfo()
                     self.logger.info("▶️ Auto-playing: \(audio.name)")
                 } else {
+                    // Loaded but not playing - ensure consistent state
+                    self.isPlaying = false
+                    self.duration = self.audioPlayer?.duration ?? 0
+                    self.durationString = self.formatTime(self.duration)
+                    self.updateNowPlayingInfo()
                     self.logger.info("⏸️ Loaded but not playing: \(audio.name)")
                 }
             }
-        }
-
-        // Load cover image immediately for current song if not already loaded
-        if audioFiles[index].coverImage == nil {
-            loadCoverImageForCurrent(index: index)
         }
 
         // Use conservative preload strategy for adjacent tracks only
@@ -1031,17 +1054,26 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     func playPause() {
-        guard let player = audioPlayer, let _ = currentIndex else { return }
+        guard let player = audioPlayer, let _ = currentIndex else {
+            logger.warning("⚠️ Cannot play/pause: no audio player or current index")
+            return
+        }
+
         if isPlaying {
+            // Pausing
             player.pause()
             stopTimer()
+            isPlaying = false
             logger.info("⏸️ Audio paused")
         } else {
+            // Playing
             player.play()
             startTimer()
+            isPlaying = true
             logger.info("▶️ Audio resumed")
         }
-        isPlaying.toggle()
+
+        // Update now playing info in all cases
         updateNowPlayingInfo()
     }
 
@@ -1049,13 +1081,19 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
         // Stop all animations using centralized manager
         PlayingIndicatorManager.shared.stopAllAnimations()
 
+        // Stop audio player and reset position
         audioPlayer?.stop()
         audioPlayer?.currentTime = 0
+
+        // Reset playback state
         currentTime = 0
         currentTimeString = "00:00"
-        stopTimer()
         isPlaying = false
+
+        // Stop timer and clear now playing info
+        stopTimer()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+
         logger.info("⏹️ Audio stopped")
     }
 
@@ -1274,8 +1312,24 @@ class AudioPlayerViewModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        logger.info("🎵 Audio finished playing, successfully: \(flag)")
+
         if flag {
-            playNext()
+            // Stop all animations before transitioning to next track
+            PlayingIndicatorManager.shared.stopAllAnimations()
+
+            // Add a small delay to ensure smooth transition
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                self.playNext()
+            }
+        } else {
+            // Handle playback failure
+            logger.error("❌ Audio playback failed")
+            DispatchQueue.main.async {
+                self.isPlaying = false
+                self.stopTimer()
+                self.updateNowPlayingInfo()
+            }
         }
     }
 
