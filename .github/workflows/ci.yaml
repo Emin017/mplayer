@@ -1,51 +1,74 @@
 name: CI
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+
+env:
+  XCODE_PROJECT: mplayer.xcodeproj
+  XCODE_SCHEME: mplayer
+  XCODE_DESTINATION: 'platform=macOS'
+  BUILD_SETTINGS: 'CODE_SIGNING_ALLOWED=NO'
+
 jobs:
   build-and-test:
     runs-on: macos-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
       - name: Show Xcode version
         run: xcodebuild -version
-      - name: Show available destinations
-        run: xcodebuild -project mplayer.xcodeproj -scheme mplayer -showdestinations
-      - name: Clean build directory
-        run: |
-          xcodebuild clean \
-            -project mplayer.xcodeproj \
-            -scheme mplayer
-      - name: Build project for macOS
-        run: |
-          xcodebuild build \
-            -project mplayer.xcodeproj \
-            -scheme mplayer \
-            -destination 'platform=macOS' \
-            -configuration Debug \
-            CODE_SIGNING_ALLOWED=NO \
-            ONLY_ACTIVE_ARCH=YES
-      - name: Run unit tests
+
+      - name: Build and test (Debug)
         run: |
           xcodebuild test \
-            -project mplayer.xcodeproj \
-            -scheme mplayer \
-            -destination 'platform=macOS' \
+            -project ${{ env.XCODE_PROJECT }} \
+            -scheme ${{ env.XCODE_SCHEME }} \
+            -destination ${{ env.XCODE_DESTINATION }} \
             -configuration Debug \
-            CODE_SIGNING_ALLOWED=NO \
+            -derivedDataPath ./DerivedData \
+            ${{ env.BUILD_SETTINGS }} \
             ONLY_ACTIVE_ARCH=YES
-      - name: Build for Release configuration
+
+      - name: Build Release .app for distribution
         run: |
+          echo "🚀 Building Release .app for distribution..."
           xcodebuild build \
-            -project mplayer.xcodeproj \
-            -scheme mplayer \
-            -destination 'platform=macOS' \
+            -project ${{ env.XCODE_PROJECT }} \
+            -scheme ${{ env.XCODE_SCHEME }} \
+            -destination ${{ env.XCODE_DESTINATION }} \
             -configuration Release \
-            CODE_SIGNING_ALLOWED=NO \
-            ONLY_ACTIVE_ARCH=YES
+            -derivedDataPath ./ReleaseData \
+            ${{ env.BUILD_SETTINGS }} \
+            ONLY_ACTIVE_ARCH=NO \
+            ARCHS="arm64"
+
+      - name: Package Release .app
+        run: |
+          # Create artifacts directory
+          mkdir -p ./artifacts
+
+          # Find and copy Release .app
+          RELEASE_APP=$(find ./ReleaseData -path "*/Release/*.app" -type d | head -1)
+          if [ -n "$RELEASE_APP" ]; then
+            cp -R "$RELEASE_APP" ./artifacts/mplayer-Release.app
+            echo "✅ Release .app packaged successfully"
+            ls -la ./artifacts/
+          else
+            echo "❌ Release .app not found!"
+            exit 1
+          fi
+
+      - name: Upload Release .app
+        uses: actions/upload-artifact@v4
+        with:
+          name: mplayer-release-${{ github.run_number }}
+          path: ./artifacts/
+          retention-days: 30
+
   code-quality-check:
     runs-on: macos-latest
     steps:
@@ -137,7 +160,33 @@ jobs:
           if [ -d "./build/mplayer.xcarchive" ]; then
             echo "Archive created successfully"
             ls -la ./build/mplayer.xcarchive/
+
+            # Also check for .app inside archive
+            find ./build/mplayer.xcarchive -name "*.app" -type d
           else
             echo "Archive not found"
             exit 1
           fi
+      - name: Extract .app from archive
+        run: |
+          echo "📦 Extracting .app from archive..."
+
+          # Create archive artifacts directory
+          mkdir -p ./archive-artifacts
+
+          # Find and copy .app from archive
+          ARCHIVE_APP=$(find ./build/mplayer.xcarchive -name "*.app" -type d | head -1)
+          if [ -n "$ARCHIVE_APP" ]; then
+            cp -R "$ARCHIVE_APP" ./archive-artifacts/mplayer-Archive.app
+            echo "✅ Extracted .app from archive"
+            ls -la ./archive-artifacts/
+          else
+            echo "❌ No .app found in archive"
+          fi
+      - name: Upload archive .app artifact
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: mplayer-archive-app-${{ github.run_number }}
+          path: ./archive-artifacts/
+          retention-days: 30
