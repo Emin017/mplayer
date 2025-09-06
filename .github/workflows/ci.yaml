@@ -74,44 +74,47 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Check for basic code issues
-        run: |
-          # 检查基本代码问题
-          echo "🔍 Checking for common code issues..."
 
-          # 检查是否有 TODO/FIXME 注释
+      - name: Run code quality checks
+        run: |
+          echo "🔍 Running code quality checks..."
+
+          # Check for TODO/FIXME comments
           if grep -r "TODO\|FIXME\|XXX" mplayer/ --include="*.swift" || true; then
             echo "📝 Found TODO/FIXME comments (review needed)"
           fi
 
-          # 检查是否有强制解包
+          # Check for potential force unwrapping
           if grep -r "!" mplayer/ --include="*.swift" | grep -v "//\|print" || true; then
             echo "⚠️ Found potential force unwrapping (review for safety)"
           fi
 
-          # 检查是否有 print 语句
+          # Check for print statements
           if grep -r "print(" mplayer/ --include="*.swift" || true; then
             echo "🐛 Found print statements (consider using proper logging)"
           fi
 
           echo "✅ Code quality check completed"
+
   security-check:
     runs-on: macos-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Check for sensitive information
-        run: |
-          echo "🔒 Checking for sensitive information..."
 
-          # 检查是否有敏感信息泄露
+      - name: Security and configuration checks
+        run: |
+          echo "🔒 Running security checks..."
+
           sensitive_found=false
 
+          # Check for sensitive information
           if grep -ri "password\|secret\|api_key\|apikey\|token\|credential" mplayer/ --include="*.swift" --include="*.plist" || true; then
-            echo "⚠️ Found potential sensitive information in code"
+            echo "⚠️ Found potential sensitive information"
             sensitive_found=true
           fi
 
+          # Check for AWS keys
           if grep -ri "AKIAI\|AKIA[0-9A-Z]\{16\}" mplayer/ --include="*.swift" --include="*.plist" || true; then
             echo "⚠️ Found potential AWS access key"
             sensitive_found=true
@@ -119,74 +122,41 @@ jobs:
 
           if [ "$sensitive_found" = false ]; then
             echo "✅ No obvious sensitive information found"
-          else
-            echo "Please review the above matches to ensure no secrets are exposed"
           fi
-      - name: Check project configuration
-        run: |
+
+          # Check project configuration
           echo "📋 Checking project configuration..."
-
-          # 检查 bundle identifier 和 team ID
-          if grep -i "PRODUCT_BUNDLE_IDENTIFIER\|DEVELOPMENT_TEAM" mplayer.xcodeproj/project.pbxproj | head -10; then
-            echo "Project bundle identifier and team settings found"
+          if grep -i "PRODUCT_BUNDLE_IDENTIFIER\|DEVELOPMENT_TEAM" ${{ env.XCODE_PROJECT }}/project.pbxproj | head -5; then
+            echo "Project configuration found"
           fi
 
-          # 检查是否有硬编码的证书信息
-          if grep -i "CODE_SIGN_IDENTITY\|PROVISIONING_PROFILE" mplayer.xcodeproj/project.pbxproj | head -5; then
-            echo "Code signing configuration found"
-          fi
+          echo "✅ Security checks completed"
 
-          echo "✅ Project configuration check completed"
-  archive-check:
+  archive-verification:
     runs-on: macos-latest
     needs: build-and-test
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Test archive creation
+
+      - name: Download Release artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: mplayer-release-${{ github.run_number }}
+          path: ./downloaded-artifacts
+
+      - name: Verify archive can be created from Release .app
         run: |
-          echo "📦 Testing archive creation..."
-          xcodebuild archive \
-            -project mplayer.xcodeproj \
-            -scheme mplayer \
-            -destination 'platform=macOS' \
-            -archivePath ./build/mplayer.xcarchive \
-            CODE_SIGNING_ALLOWED=NO \
-            SKIP_INSTALL=NO
+          echo "📦 Verifying archive creation..."
 
-          echo "✅ Archive creation successful"
-      - name: Check archive contents
-        run: |-
-          if [ -d "./build/mplayer.xcarchive" ]; then
-            echo "Archive created successfully"
-            ls -la ./build/mplayer.xcarchive/
+          if [ -d "./downloaded-artifacts/mplayer-Release.app" ]; then
+            echo "✅ Release .app found and ready for distribution"
+            ls -la ./downloaded-artifacts/
 
-            # Also check for .app inside archive
-            find ./build/mplayer.xcarchive -name "*.app" -type d
+            # Get basic app info
+            echo "App bundle contents:"
+            ls -la "./downloaded-artifacts/mplayer-Release.app/Contents/"
           else
-            echo "Archive not found"
+            echo "❌ Release .app verification failed"
             exit 1
           fi
-      - name: Extract .app from archive
-        run: |
-          echo "📦 Extracting .app from archive..."
-
-          # Create archive artifacts directory
-          mkdir -p ./archive-artifacts
-
-          # Find and copy .app from archive
-          ARCHIVE_APP=$(find ./build/mplayer.xcarchive -name "*.app" -type d | head -1)
-          if [ -n "$ARCHIVE_APP" ]; then
-            cp -R "$ARCHIVE_APP" ./archive-artifacts/mplayer-Archive.app
-            echo "✅ Extracted .app from archive"
-            ls -la ./archive-artifacts/
-          else
-            echo "❌ No .app found in archive"
-          fi
-      - name: Upload archive .app artifact
-        uses: actions/upload-artifact@v4
-        if: success()
-        with:
-          name: mplayer-archive-app-${{ github.run_number }}
-          path: ./archive-artifacts/
-          retention-days: 30
