@@ -4,6 +4,8 @@
 //
 //  Created by Emin (qiming chu) on 2025/9/3.
 //
+// SPDX-License-Identifier: MulanPSL-2.0
+// SPDX-FileCopyrightText: 2025 Emin (Qiming Chu) <me@emin.chat>
 
 import SwiftUI
 import MediaPlayer
