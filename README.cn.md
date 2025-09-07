@@ -8,7 +8,7 @@
 <img alt="AI" src="https://img.shields.io/badge/AI-powered-%23000000.svg?style=for-the-badge">
 
 ![GitHub](https://img.shields.io/github/license/Emin017/mplayer)
-![GitHub workflows](https://img.shields.io/github/actions/workflow/status/Emin017/mplayer/ci.yml)
+![GitHub workflows](https://img.shields.io/github/actions/workflow/status/Emin017/mplayer/ci.yaml)
 ![GitHub issues](https://img.shields.io/github/issues/Emin017/mplayer)
 ![GitHub pull requests](https://img.shields.io/github/issues-pr/Emin017/mplayer)
 ![GitHub release (latest by date)](https://img.shields.io/github/v/release/Emin017/mplayer)
